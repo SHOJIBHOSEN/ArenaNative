@@ -6,9 +6,12 @@ workflows:
     environment:
       java: 17
     scripts:
+      - name: Install Gradle
+        script: |
+          brew install gradle
       - name: Build debug APK
         script: |
-          chmod +x ./gradlew
-          ./gradlew --no-daemon assembleDebug
+          gradle --version
+          gradle --no-daemon assembleDebug
     artifacts:
       - app/build/outputs/apk/debug/*.apk
