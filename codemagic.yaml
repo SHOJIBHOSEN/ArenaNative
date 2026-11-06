@@ -16,6 +16,3 @@ workflows:
           ./gradlew --no-daemon assembleDebug
     artifacts:
       - app/build/outputs/apk/debug/*.apk
-    publishing:
-      email:
-        recipients: []
