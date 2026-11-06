@@ -4,11 +4,14 @@ import android.app.Activity
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.ValueCallback
@@ -32,12 +35,50 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Draw behind system bars, then apply their insets to keep content clear of the clock/navigation area.
+        window.statusBarColor = Color.rgb(18, 18, 18)
+        window.navigationBarColor = Color.rgb(18, 18, 18)
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+
         val root = FrameLayout(this)
+        root.setBackgroundColor(Color.rgb(18, 18, 18))
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val top: Int
+            val bottom: Int
+            if (Build.VERSION.SDK_INT >= 30) {
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                top = bars.top
+                bottom = bars.bottom
+            } else {
+                @Suppress("DEPRECATION")
+                val legacyTop = insets.systemWindowInsetTop
+                @Suppress("DEPRECATION")
+                val legacyBottom = insets.systemWindowInsetBottom
+                top = legacyTop
+                bottom = legacyBottom
+            }
+            view.setPadding(0, top, 0, bottom)
+            insets
+        }
+
         web = WebView(this)
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
         root.addView(web, FrameLayout.LayoutParams(-1, -1))
         root.addView(progress, FrameLayout.LayoutParams(-1, dp(3)))
         setContentView(root)
+        root.requestApplyInsets()
 
         web.settings.apply {
             javaScriptEnabled = true
@@ -50,6 +91,13 @@ class MainActivity : Activity() {
             setSupportMultipleWindows(true)
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
+            if (Build.VERSION.SDK_INT >= 29) {
+                @Suppress("DEPRECATION")
+                forceDark = WebSettings.FORCE_DARK_ON
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
+                setAlgorithmicDarkeningAllowed(true)
+            }
         }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
@@ -89,12 +137,17 @@ class MainActivity : Activity() {
                 }
                 fullscreenView = view
                 fullscreenCallback = callback
-                (window.decorView as ViewGroup).addView(
-                    view, ViewGroup.LayoutParams(-1, -1)
-                )
-                window.decorView.systemUiVisibility =
-                    (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY)
+                (window.decorView as ViewGroup).addView(view, ViewGroup.LayoutParams(-1, -1))
+                if (Build.VERSION.SDK_INT >= 30) {
+                    window.setDecorFitsSystemWindows(false)
+                }
+                @Suppress("DEPRECATION")
+                run {
+                    window.decorView.systemUiVisibility =
+                        View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                }
             }
             override fun onHideCustomView() { leaveFullscreen() }
         }
@@ -151,7 +204,15 @@ class MainActivity : Activity() {
         fullscreenView = null
         fullscreenCallback?.onCustomViewHidden()
         fullscreenCallback = null
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+        @Suppress("DEPRECATION")
+        run {
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+        }
+        window.statusBarColor = Color.rgb(18, 18, 18)
+        window.navigationBarColor = Color.rgb(18, 18, 18)
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
