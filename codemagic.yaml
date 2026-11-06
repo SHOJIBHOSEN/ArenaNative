@@ -1,0 +1,21 @@
+workflows:
+  android-debug-apk:
+    name: ArenaNative Android Debug APK
+    max_build_duration: 60
+    instance_type: linux_x2
+    environment:
+      java: 17
+    scripts:
+      - name: Set up Android SDK
+        script: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Build debug APK
+        script: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+    artifacts:
+      - app/build/outputs/apk/debug/*.apk
+    publishing:
+      email:
+        recipients: []
