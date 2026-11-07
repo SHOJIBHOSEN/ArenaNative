@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+dependencies {
+    implementation("androidx.webkit:webkit:1.12.1")
+}
 android {
     namespace = "com.arenanative"
     compileSdk = 36
