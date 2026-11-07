@@ -73,9 +73,9 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun beginBlob(name: String, mime: String) {
-            if (!isTrustedArena()) return
-            synchronized(this@MainActivity) {
+        fun beginBlob(name: String, mime: String): Boolean {
+            if (!isTrustedArena()) return false
+            return synchronized(this@MainActivity) {
                 try {
                     finishBlob(false)
                     val safeName = cleanFileName(name)
@@ -85,6 +85,17 @@ class MainActivity : Activity() {
                         if (Build.VERSION.SDK_INT >= 29) {
                             put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
                             put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            val directory = java.io.File(
+                                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                                "ArenaNative"
+                            )
+                            if (!directory.exists() && !directory.mkdirs()) {
+                                throw IllegalStateException("Could not create Downloads/ArenaNative")
+                            }
+                            @Suppress("DEPRECATION")
+                            put(MediaStore.MediaColumns.DATA, java.io.File(directory, safeName).absolutePath)
                         }
                     }
                     val collection = if (Build.VERSION.SDK_INT >= 29) {
@@ -97,11 +108,13 @@ class MainActivity : Activity() {
                     blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
                         ?: throw IllegalStateException("Could not open download file")
                     blobDisplayName = safeName
+                    true
                 } catch (e: Exception) {
                     finishBlob(false)
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
                     }
+                    false
                 }
             }
         }
@@ -243,7 +256,7 @@ class MainActivity : Activity() {
                   if (!response.ok) throw new Error('Could not read generated file');
                   const blob = await response.blob();
                   const type = mime || blob.type || 'application/octet-stream';
-                  ArenaNative.beginBlob(name, type);
+                  const ready = ArenaNative.beginBlob(name, type);\n                  if (!ready) throw new Error('Could not create destination file');
                   const reader = blob.stream().getReader();
                   while (true) {
                     const part = await reader.read();
