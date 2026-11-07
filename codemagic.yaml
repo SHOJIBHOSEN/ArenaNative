@@ -12,6 +12,19 @@ workflows:
           unzip -q /tmp/gradle-8.11.1-bin.zip -d /tmp
           export PATH="/tmp/gradle-8.11.1/bin:$PATH"
           gradle --version
+      - name: Install Android SDK Platform 36
+        script: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Library/Android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "Android sdkmanager not found"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" "platforms;android-36" "build-tools;35.0.0"
       - name: Build debug APK
         script: |
           export PATH="/tmp/gradle-8.11.1/bin:$PATH"
