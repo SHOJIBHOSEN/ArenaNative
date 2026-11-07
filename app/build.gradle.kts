@@ -4,13 +4,13 @@ plugins {
 }
 android {
     namespace = "com.arenanative"
-    compileSdk = 35
+    compileSdk = 37
     defaultConfig {
         applicationId = "com.arenanative"
-        minSdk = 23
-        targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        minSdk = 24
+        targetSdk = 37
+        versionCode = 3
+        versionName = "1.2.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
