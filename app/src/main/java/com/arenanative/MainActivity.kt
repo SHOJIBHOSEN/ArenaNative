@@ -102,7 +102,11 @@ class MainActivity : Activity() {
     }
 
     private fun replyToBridge(reply: JavaScriptReplyProxy, id: String, ok: Boolean) {
-        reply.postMessage(JSONObject().put("id", id).put("ok", ok).toString())
+        try {
+            reply.postMessage(JSONObject().put("id", id).put("ok", ok).toString())
+        } catch (_: Exception) {
+            // The WebView may have navigated away or been destroyed during a transfer.
+        }
     }
 
     private fun handleBridgeMessage(
@@ -112,6 +116,8 @@ class MainActivity : Activity() {
         reply: JavaScriptReplyProxy
     ) {
         if (!isMainFrame || !isAllowedArenaOrigin(sourceOrigin)) return
+        // Bound bridge payloads so a page cannot force large temporary allocations.
+        if (rawMessage.length > 100 * 1024) return
         val message = try { JSONObject(rawMessage) } catch (_: Exception) { return }
         val action = message.optString("action")
         val id = message.optString("id")
@@ -135,7 +141,10 @@ class MainActivity : Activity() {
             }
             "writeBlobChunk" -> bridgeExecutor.execute {
                 val ok = try {
-                    val bytes = Base64.decode(message.optString("data"), Base64.DEFAULT)
+                    val encoded = message.optString("data")
+                    if (encoded.length > 70 * 1024) throw IllegalArgumentException("Download chunk is too large")
+                    val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                    if (bytes.size > 48 * 1024) throw IllegalArgumentException("Download chunk is too large")
                     synchronized(this) {
                         val output = blobOutput ?: throw IllegalStateException("Download output is not open")
                         output.write(bytes)
