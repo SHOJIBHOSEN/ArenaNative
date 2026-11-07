@@ -53,13 +53,13 @@ class MainActivity : Activity() {
     private val legacyStoragePermissionRequest = 4103
     private data class PendingDownload(val url: String, val name: String, val mime: String)
     private var pendingDownload: PendingDownload? = null
-    private var activeDownloadId: Long? = null
+    private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
             val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
-            if (completedId != activeDownloadId) return
+            if (!activeDownloadIds.remove(completedId)) return
             val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             manager.query(DownloadManager.Query().setFilterById(completedId))?.use { cursor ->
                 if (cursor.moveToFirst()) {
@@ -75,7 +75,6 @@ class MainActivity : Activity() {
                     Toast.makeText(this@MainActivity, "Download failed: no result from DownloadManager", Toast.LENGTH_LONG).show()
                 }
             }
-            activeDownloadId = null
         }
     }
     private val arenaHost = "arena.ai"
@@ -494,7 +493,8 @@ class MainActivity : Activity() {
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ArenaNative/$name")
             val cookie = CookieManager.getInstance().getCookie(url)
             if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
-            activeDownloadId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            val downloadId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            activeDownloadIds.add(downloadId)
             Toast.makeText(this, "Download started. Check notification for progress.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
