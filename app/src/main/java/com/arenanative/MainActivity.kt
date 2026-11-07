@@ -374,15 +374,15 @@ class MainActivity : Activity() {
 
     private fun continueDownload(url: String, name: String, mime: String) {
         when (Uri.parse(url).scheme?.lowercase(Locale.ROOT)) {
-            "http", "https" -> openInExternalBrowser(url)
+            "http", "https" -> enqueueHttpDownload(url, name, mime)
             "blob", "data" -> {
-                // blob: and data: URLs exist only inside this WebView and cannot be
-                // opened by an external browser. Keep their native save path.
-                val js = "window.__arenaNativeFetchBlob && window.__arenaNativeFetchBlob(" +
-                    "${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)})"
+                // These URLs are scoped to this WebView; they must be saved by the native bridge.
+                val js = "if (window.__arenaNativeFetchBlob) {" +
+                    "window.__arenaNativeFetchBlob(${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)});" +
+                    "} else { ArenaNative.reportDownloadError('Download handler is not ready. Reload Arena.ai and try again.'); }"
                 web.evaluateJavascript(js, null)
             }
-            else -> Toast.makeText(this, "Unsupported download link", Toast.LENGTH_LONG).show()
+            else -> Toast.makeText(this, "Unsupported download link type", Toast.LENGTH_LONG).show()
         }
     }
 
