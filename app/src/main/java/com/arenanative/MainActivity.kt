@@ -595,7 +595,6 @@ class MainActivity : Activity() {
                   await nativeCall('finishBlobTransfer', {success:true});
                 } catch (e) {
                   await nativeCall('finishBlobTransfer', {success:false});
-                  nativeSend('reportDownloadError', {message:String(e && e.message ? e.message : e)});
                 }
               };
               document.addEventListener('click', function(event) {
