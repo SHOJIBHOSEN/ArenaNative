@@ -6,12 +6,15 @@ workflows:
     environment:
       java: 17
     scripts:
-      - name: Install Gradle
+      - name: Install pinned Gradle 8.11.1
         script: |
-          brew install gradle
+          curl --fail --location --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip --output /tmp/gradle-8.11.1-bin.zip
+          unzip -q /tmp/gradle-8.11.1-bin.zip -d /tmp
+          export PATH="/tmp/gradle-8.11.1/bin:$PATH"
+          gradle --version
       - name: Build debug APK
         script: |
-          gradle --version
-          gradle --no-daemon assembleDebug
+          export PATH="/tmp/gradle-8.11.1/bin:$PATH"
+          gradle --no-daemon --stacktrace assembleDebug
     artifacts:
       - app/build/outputs/apk/debug/*.apk
