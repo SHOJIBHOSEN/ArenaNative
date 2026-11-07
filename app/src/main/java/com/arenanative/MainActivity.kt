@@ -5,6 +5,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ContentValues
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -47,6 +50,31 @@ class MainActivity : Activity() {
     private val legacyStoragePermissionRequest = 4103
     private data class PendingDownload(val url: String, val name: String, val mime: String)
     private var pendingDownload: PendingDownload? = null
+    private var activeDownloadId: Long? = null
+    private var downloadReceiverRegistered = false
+    private val downloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+            val completedId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+            if (completedId != activeDownloadId) return
+            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            manager.query(DownloadManager.Query().setFilterById(completedId))?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+                    val message = if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        "Download complete: Download/ArenaNative"
+                    } else {
+                        "Download failed (status=$status, reason=$reason)"
+                    }
+                    Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this@MainActivity, "Download failed: no result from DownloadManager", Toast.LENGTH_LONG).show()
+                }
+            }
+            activeDownloadId = null
+        }
+    }
     private val arenaHost = "arena.ai"
     private val downloadFolder = "Download/ArenaNative"
 
@@ -191,6 +219,13 @@ class MainActivity : Activity() {
         root.addView(web, FrameLayout.LayoutParams(-1, -1))
         root.addView(progress, FrameLayout.LayoutParams(-1, dp(3)))
         setContentView(root)
+        val downloadFilter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(downloadReceiver, downloadFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION") registerReceiver(downloadReceiver, downloadFilter)
+        }
+        downloadReceiverRegistered = true
         root.requestApplyInsets()
 
         web.settings.apply {
@@ -378,8 +413,8 @@ class MainActivity : Activity() {
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ArenaNative/$name")
             val cookie = CookieManager.getInstance().getCookie(url)
             if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
-            (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            Toast.makeText(this, "Downloading to Download/ArenaNative", Toast.LENGTH_LONG).show()
+            activeDownloadId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
+            Toast.makeText(this, "Download started. Check notification for progress.", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
@@ -464,6 +499,10 @@ class MainActivity : Activity() {
         finishBlob(false)
         web.stopLoading()
         web.destroy()
+        if (downloadReceiverRegistered) {
+            try { unregisterReceiver(downloadReceiver) } catch (_: Exception) { }
+            downloadReceiverRegistered = false
+        }
         super.onDestroy()
     }
 }
