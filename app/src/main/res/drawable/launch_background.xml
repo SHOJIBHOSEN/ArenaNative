@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="#080C14"/>
+    <item android:gravity="center" android:width="220dp" android:height="220dp">
+        <drawable android:drawable="@drawable/ic_arena_logo"/>
+    </item>
+</layer-list>
