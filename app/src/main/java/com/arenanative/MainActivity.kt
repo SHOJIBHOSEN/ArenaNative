@@ -120,13 +120,30 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        fun writeBlobChunk(base64: String) {
-            if (!isTrustedArena()) return
-            try {
+        fun writeBlobChunk(base64: String): Boolean {
+            if (!isTrustedArena()) return false
+            return try {
                 val bytes = Base64.decode(base64, Base64.DEFAULT)
-                synchronized(this@MainActivity) { blobOutput?.write(bytes) }
+                synchronized(this@MainActivity) {
+                    val output = blobOutput ?: throw IllegalStateException("Download output is not open")
+                    output.write(bytes)
+                }
+                true
             } catch (e: Exception) {
-                runOnUiThread { finishBlob(false) }
+                runOnUiThread {
+                    finishBlob(false)
+                    Toast.makeText(this@MainActivity, "Download write failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun reportDownloadError(message: String) {
+            if (!isTrustedArena()) return
+            runOnUiThread {
+                finishBlob(false)
+                Toast.makeText(this@MainActivity, "Download failed: ${message.take(180)}", Toast.LENGTH_LONG).show()
             }
         }
 
@@ -265,11 +282,12 @@ class MainActivity : Activity() {
                     let binary = '';
                     const bytes = part.value;
                     for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                    ArenaNative.writeBlobChunk(btoa(binary));
+                    if (!ArenaNative.writeBlobChunk(btoa(binary))) throw new Error('Android could not write the file');
                   }
                   ArenaNative.finishBlobTransfer(true);
                 } catch (e) {
                   ArenaNative.finishBlobTransfer(false);
+                  ArenaNative.reportDownloadError(String(e && e.message ? e.message : e));
                 }
               };
               document.addEventListener('click', function(event) {
