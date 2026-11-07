@@ -472,7 +472,7 @@ class MainActivity : Activity() {
                         folderSetupPermissionRequest
                     )
                 } else {
-                    if (ensureDownloadFolder()) {
+                    if (verifyDownloadFolderWrite()) {
                         getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                             .edit().putBoolean("download_folder_ready", true).apply()
                         completeFolderSetup()
@@ -502,42 +502,60 @@ class MainActivity : Activity() {
         folderSetupView = null
     }
 
-    private fun ensureDownloadFolder(): Boolean {
-        return try {
+    private fun verifyDownloadFolderWrite(): Boolean {
+        val testName = "ArenaNative_setup_check_${System.nanoTime()}.txt"
+        val testBytes = ByteArray(1024) { index -> (index % 251).toByte() }
+        var testUri: Uri? = null
+        var testFile: java.io.File? = null
+        var passed = false
+        try {
             if (Build.VERSION.SDK_INT < 29) {
                 @Suppress("DEPRECATION")
                 val folder = java.io.File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                     "ArenaNative"
                 )
-                (folder.isDirectory || folder.mkdirs()) && folder.isDirectory
+                if ((!folder.isDirectory && !folder.mkdirs()) || !folder.isDirectory) {
+                    throw IllegalStateException("Download/ArenaNative ফোল্ডার তৈরি করা যায়নি")
+                }
+                testFile = java.io.File(folder, testName)
+                java.io.FileOutputStream(testFile).use { it.write(testBytes) }
+                val verified = testFile!!.inputStream().use { it.readBytes() }
+                passed = verified.contentEquals(testBytes)
             } else {
-                val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/"
                 val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                val projection = arrayOf(MediaStore.MediaColumns._ID)
-                val existing = contentResolver.query(
-                    collection,
-                    projection,
-                    "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
-                    arrayOf(relativePath),
-                    null
-                )
-                val hasEntry = existing?.use { it.moveToFirst() } ?: false
-                if (hasEntry) {
-                    true
-                } else {
-                    // MediaStore creates the public directory when this hidden marker is inserted.
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, ".arenanative")
-                        put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
-                    }
-                    contentResolver.insert(collection, values) != null
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, testName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                testUri = contentResolver.insert(collection, values)
+                    ?: throw IllegalStateException("ফোল্ডারে পরীক্ষামূলক ফাইল তৈরি করা যায়নি")
+                val uri = testUri!!
+                contentResolver.openOutputStream(uri, "w")?.use { it.write(testBytes) }
+                    ?: throw IllegalStateException("ফাইলে লেখা যাচ্ছে না")
+                val verified = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("ফাইল পড়ে যাচাই করা যাচ্ছে না")
+                passed = verified.contentEquals(testBytes)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ArenaNative", "Download folder write test failed", e)
+            passed = false
+        } finally {
+            testFile?.let { file ->
+                if (file.exists() && !file.delete()) passed = false
+            }
+            testUri?.let { uri ->
+                try {
+                    if (contentResolver.delete(uri, null, null) <= 0) passed = false
+                } catch (e: Exception) {
+                    android.util.Log.w("ArenaNative", "Could not remove setup test file", e)
+                    passed = false
                 }
             }
-        } catch (_: Exception) {
-            false
         }
+        return passed
     }
 
     private fun enterArena(savedInstanceState: Bundle?) {
@@ -684,7 +702,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == folderSetupPermissionRequest) {
             if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED &&
-                ensureDownloadFolder()) {
+                verifyDownloadFolderWrite()) {
                 getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                     .edit().putBoolean("download_folder_ready", true).apply()
                 completeFolderSetup()
