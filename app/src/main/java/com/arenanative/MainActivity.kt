@@ -374,12 +374,32 @@ class MainActivity : Activity() {
 
     private fun continueDownload(url: String, name: String, mime: String) {
         when (Uri.parse(url).scheme?.lowercase(Locale.ROOT)) {
-            "http", "https" -> enqueueHttpDownload(url, name, mime)
+            "http", "https" -> openInExternalBrowser(url)
             "blob", "data" -> {
+                // blob: and data: URLs exist only inside this WebView and cannot be
+                // opened by an external browser. Keep their native save path.
                 val js = "window.__arenaNativeFetchBlob && window.__arenaNativeFetchBlob(" +
                     "${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)})"
                 web.evaluateJavascript(js, null)
             }
+            else -> Toast.makeText(this, "Unsupported download link", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openInExternalBrowser(url: String) {
+        try {
+            val uri = Uri.parse(url)
+            if (uri.scheme != "http" && uri.scheme != "https") {
+                Toast.makeText(this, "Only web links can open in the browser", Toast.LENGTH_LONG).show()
+                return
+            }
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            startActivity(intent)
+            Toast.makeText(this, "Opened download link in your browser", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not open browser: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
