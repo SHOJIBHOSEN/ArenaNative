@@ -76,11 +76,14 @@ class MainActivity : Activity() {
         }
     }
     private val arenaHost = "arena.ai"
+    @Volatile private var trustedArenaPage = false
     private val downloadFolder = "Download/ArenaNative"
 
-    private fun isTrustedArena(): Boolean {
-        val host = Uri.parse(web.url ?: "").host?.lowercase(Locale.ROOT) ?: return false
-        return host == arenaHost || host.endsWith(".$arenaHost")
+    private fun isTrustedArena(): Boolean = trustedArenaPage
+
+    private fun updateTrustedArenaPage(url: String?) {
+        val host = Uri.parse(url ?: "").host?.lowercase(Locale.ROOT)
+        trustedArenaPage = host == arenaHost || (host?.endsWith(".$arenaHost") == true)
     }
 
     private inner class ArenaBridge {
@@ -249,9 +252,13 @@ class MainActivity : Activity() {
         web.addJavascriptInterface(ArenaBridge(), "ArenaNative")
 
         web.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                updateTrustedArenaPage(request.url.toString())
+                return false
+            }
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
+                updateTrustedArenaPage(url)
                 if (isTrustedArena()) installDownloadHook()
             }
         }
