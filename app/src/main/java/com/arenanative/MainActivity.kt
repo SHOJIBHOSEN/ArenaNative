@@ -291,7 +291,9 @@ class MainActivity : Activity() {
                 "ArenaNative",
                 setOf("https://arena.ai", "https://*.arena.ai")
             ) { _, message, sourceOrigin, isMainFrame, replyProxy ->
-                handleBridgeMessage(message.data, sourceOrigin, isMainFrame, replyProxy)
+                message.data?.let { data ->
+                    handleBridgeMessage(data, sourceOrigin, isMainFrame, replyProxy)
+                }
             }
             bridgeAvailable = true
         } else {
