@@ -233,6 +233,10 @@ class MainActivity : Activity() {
             domStorageEnabled = true
             databaseEnabled = true
             loadsImagesAutomatically = true
+            // Respect the website's viewport metadata on phones, tablets and resizable windows.
+            useWideViewPort = true
+            loadWithOverviewMode = false
+            textZoom = 100
             allowFileAccess = false
             allowContentAccess = true
             javaScriptCanOpenWindowsAutomatically = true
@@ -305,10 +309,17 @@ class MainActivity : Activity() {
     }
 
     private fun showDuroodWelcome(root: FrameLayout, savedInstanceState: Bundle?) {
+        // A scrollable, centered welcome panel prevents clipping on short screens
+        // and keeps a comfortable reading width on tablets and desktop-sized windows.
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+            clipToPadding = false
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = android.view.Gravity.CENTER
-            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setPadding(dp(24), dp(28), dp(24), dp(28))
             setBackgroundColor(Color.rgb(18, 18, 18))
         }
         val heading = TextView(this).apply {
@@ -322,7 +333,7 @@ class MainActivity : Activity() {
             textSize = 19f
             setTextColor(Color.WHITE)
             gravity = android.view.Gravity.CENTER
-            setPadding(0, dp(28), 0, dp(20))
+            setPadding(0, dp(24), 0, dp(18))
         }
         val arabic = TextView(this).apply {
             text = "اللَّهُمَّ صَلِّ عَلَىٰ مُحَمَّدٍ وَعَلَىٰ آلِ مُحَمَّدٍ"
@@ -330,20 +341,21 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(190, 180, 255))
             gravity = android.view.Gravity.CENTER
             textDirection = View.TEXT_DIRECTION_RTL
-            setPadding(0, dp(8), 0, dp(24))
+            setPadding(0, dp(8), 0, dp(22))
         }
         val instruction = TextView(this).apply {
             text = "দরুদ পাঠ শেষ হলে নিচের ‘পরবর্তী’ বাটনে চাপ দিন।"
             textSize = 15f
             setTextColor(Color.LTGRAY)
             gravity = android.view.Gravity.CENTER
-            setPadding(0, 0, 0, dp(28))
+            setPadding(0, 0, 0, dp(24))
         }
         val next = Button(this).apply {
             text = "পরবর্তী"
             isAllCaps = false
+            minHeight = dp(52)
             setOnClickListener {
-                root.removeView(panel)
+                root.removeView(scroll)
                 web.visibility = View.VISIBLE
                 if (savedInstanceState == null) web.loadUrl("https://arena.ai")
                 else web.restoreState(savedInstanceState)
@@ -354,7 +366,12 @@ class MainActivity : Activity() {
         panel.addView(arabic, LinearLayout.LayoutParams(-1, -2))
         panel.addView(instruction, LinearLayout.LayoutParams(-1, -2))
         panel.addView(next, LinearLayout.LayoutParams(-1, dp(52)))
-        root.addView(panel, FrameLayout.LayoutParams(-1, -1))
+        val screenWidth = resources.configuration.screenWidthDp
+        val panelWidth = if (screenWidth > 0) minOf(dp(560), dp(screenWidth - 32).coerceAtLeast(dp(280))) else -1
+        val contentFrame = FrameLayout(this)
+        contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.CENTER))
+        scroll.addView(contentFrame, android.widget.ScrollView.LayoutParams(-1, -1))
+        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun installDownloadHook() {
