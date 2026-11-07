@@ -21,12 +21,15 @@ import android.view.ViewGroup
 import android.view.WindowInsets
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
-import android.webkit.JavascriptInterface
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import androidx.webkit.JavaScriptReplyProxy
+import java.util.concurrent.Executors
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -57,6 +60,8 @@ class MainActivity : Activity() {
     private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
     private var folderSetupView: View? = null
+    private val bridgeExecutor = Executors.newSingleThreadExecutor()
+    private var bridgeAvailable = false
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
@@ -90,96 +95,110 @@ class MainActivity : Activity() {
         trustedArenaPage = host == arenaHost || (host?.endsWith(".$arenaHost") == true)
     }
 
-    private inner class ArenaBridge {
-        @JavascriptInterface
-        fun requestDownload(url: String, name: String, mime: String) {
-            runOnUiThread {
-                if (!isTrustedArena()) return@runOnUiThread
-                val safeName = cleanFileName(name)
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Download file?")
-                    .setMessage("$safeName\n\nSave the original file to Download/ArenaNative?")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Download") { _, _ ->
-                        startDownload(url, safeName, mime)
-                    }
-                    .show()
-            }
-        }
+    private fun isAllowedArenaOrigin(origin: Uri): Boolean {
+        val host = origin.host?.lowercase(Locale.ROOT) ?: return false
+        return origin.scheme.equals("https", ignoreCase = true) &&
+            (host == arenaHost || host.endsWith(".$arenaHost"))
+    }
 
-        @JavascriptInterface
-        fun beginBlob(name: String, mime: String): Boolean {
-            if (!isTrustedArena()) return false
-            return synchronized(this@MainActivity) {
-                try {
-                    finishBlob(false)
-                    val safeName = cleanFileName(name)
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
-                        if (Build.VERSION.SDK_INT >= 29) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
-                            put(MediaStore.MediaColumns.IS_PENDING, 1)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            val directory = java.io.File(
-                                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-                                "ArenaNative"
-                            )
-                            if (!directory.exists() && !directory.mkdirs()) {
-                                throw IllegalStateException("Could not create Downloads/ArenaNative")
-                            }
-                            @Suppress("DEPRECATION")
-                            put(MediaStore.MediaColumns.DATA, java.io.File(directory, safeName).absolutePath)
-                        }
+    private fun replyToBridge(reply: JavaScriptReplyProxy, id: String, ok: Boolean) {
+        reply.postMessage(JSONObject().put("id", id).put("ok", ok).toString())
+    }
+
+    private fun handleBridgeMessage(
+        rawMessage: String,
+        sourceOrigin: Uri,
+        isMainFrame: Boolean,
+        reply: JavaScriptReplyProxy
+    ) {
+        if (!isMainFrame || !isAllowedArenaOrigin(sourceOrigin)) return
+        val message = try { JSONObject(rawMessage) } catch (_: Exception) { return }
+        val action = message.optString("action")
+        val id = message.optString("id")
+        when (action) {
+            "requestDownload" -> {
+                val url = message.optString("url")
+                val name = cleanFileName(message.optString("name"))
+                val mime = message.optString("mime")
+                runOnUiThread {
+                    AlertDialog.Builder(this)
+                        .setTitle("Download file?")
+                        .setMessage("$name\n\nSave the original file to Download/ArenaNative?")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Download") { _, _ -> startDownload(url, name, mime) }
+                        .show()
+                }
+            }
+            "beginBlob" -> bridgeExecutor.execute {
+                val ok = beginBlobFile(message.optString("name"), message.optString("mime"))
+                replyToBridge(reply, id, ok)
+            }
+            "writeBlobChunk" -> bridgeExecutor.execute {
+                val ok = try {
+                    val bytes = Base64.decode(message.optString("data"), Base64.DEFAULT)
+                    synchronized(this) {
+                        val output = blobOutput ?: throw IllegalStateException("Download output is not open")
+                        output.write(bytes)
                     }
-                    val collection = if (Build.VERSION.SDK_INT >= 29) {
-                        MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    } else {
-                        MediaStore.Files.getContentUri("external")
-                    }
-                    blobUri = contentResolver.insert(collection, values)
-                        ?: throw IllegalStateException("Could not create download file")
-                    blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
-                        ?: throw IllegalStateException("Could not open download file")
-                    blobDisplayName = safeName
                     true
-                } catch (e: Exception) {
-                    finishBlob(false)
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
-                    false
-                }
+                } catch (_: Exception) { false }
+                replyToBridge(reply, id, ok)
+                if (!ok) runOnUiThread { finishBlob(false) }
+            }
+            "finishBlobTransfer" -> bridgeExecutor.execute {
+                val success = message.optBoolean("success", false)
+                runOnUiThread { finishBlob(success) }
+                replyToBridge(reply, id, true)
+            }
+            "reportDownloadError" -> bridgeExecutor.execute {
+                runOnUiThread { finishBlob(false) }
+                replyToBridge(reply, id, true)
             }
         }
+    }
 
-        @JavascriptInterface
-        fun writeBlobChunk(base64: String): Boolean {
-            if (!isTrustedArena()) return false
-            return try {
-                val bytes = Base64.decode(base64, Base64.DEFAULT)
-                synchronized(this@MainActivity) {
-                    val output = blobOutput ?: throw IllegalStateException("Download output is not open")
-                    output.write(bytes)
+    private fun beginBlobFile(name: String, mime: String): Boolean {
+        return synchronized(this) {
+            try {
+                finishBlob(false)
+                val safeName = cleanFileName(name)
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        val directory = java.io.File(
+                            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                            "ArenaNative"
+                        )
+                        if (!directory.exists() && !directory.mkdirs()) {
+                            throw IllegalStateException("Could not create Downloads/ArenaNative")
+                        }
+                        @Suppress("DEPRECATION")
+                        put(MediaStore.MediaColumns.DATA, java.io.File(directory, safeName).absolutePath)
+                    }
                 }
+                val collection = if (Build.VERSION.SDK_INT >= 29) {
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Files.getContentUri("external")
+                }
+                blobUri = contentResolver.insert(collection, values)
+                    ?: throw IllegalStateException("Could not create download file")
+                blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
+                    ?: throw IllegalStateException("Could not open download file")
+                blobDisplayName = safeName
                 true
             } catch (e: Exception) {
-                runOnUiThread { finishBlob(false) }
+                finishBlob(false)
+                runOnUiThread {
+                    Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
                 false
             }
-        }
-
-        @JavascriptInterface
-        fun reportDownloadError(message: String) {
-            if (!isTrustedArena()) return
-            runOnUiThread { finishBlob(false) }
-        }
-
-        @JavascriptInterface
-        fun finishBlobTransfer(success: Boolean) {
-            if (!isTrustedArena()) return
-            runOnUiThread { finishBlob(success) }
         }
     }
 
@@ -257,7 +276,19 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WebView.startSafeBrowsing(applicationContext, null)
         }
-        web.addJavascriptInterface(ArenaBridge(), "ArenaNative")
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(
+                web,
+                "ArenaNative",
+                setOf("https://arena.ai", "https://*.arena.ai")
+            ) { _, message, sourceOrigin, isMainFrame, replyProxy ->
+                handleBridgeMessage(message.data, sourceOrigin, isMainFrame, replyProxy)
+            }
+            bridgeAvailable = true
+        } else {
+            bridgeAvailable = false
+            Toast.makeText(this, "এই Android System WebView সংস্করণে নিরাপদ ডাউনলোড ব্রিজ সমর্থিত নয়। WebView আপডেট করুন।", Toast.LENGTH_LONG).show()
+        }
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -505,17 +536,39 @@ class MainActivity : Activity() {
     }
 
     private fun installDownloadHook() {
+        if (!bridgeAvailable) return
         val script = """
             (function() {
-              if (window.__arenaNativeHookInstalled) return;
+              if (window.__arenaNativeHookInstalled || !window.ArenaNative) return;
               window.__arenaNativeHookInstalled = true;
+              let nativeRequestId = 0;
+              const nativePending = new Map();
+              window.ArenaNative.onmessage = function(event) {
+                try {
+                  const response = JSON.parse(event.data);
+                  const pending = nativePending.get(response.id);
+                  if (!pending) return;
+                  nativePending.delete(response.id);
+                  pending(response.ok === true);
+                } catch (_) {}
+              };
+              function nativeCall(action, fields) {
+                return new Promise(resolve => {
+                  const id = String(++nativeRequestId);
+                  nativePending.set(id, resolve);
+                  window.ArenaNative.postMessage(JSON.stringify(Object.assign({id:id, action:action}, fields || {})));
+                });
+              }
+              function nativeSend(action, fields) {
+                window.ArenaNative.postMessage(JSON.stringify(Object.assign({action:action}, fields || {})));
+              }
               window.__arenaNativeFetchBlob = async function(url, name, mime) {
                 try {
                   const response = await fetch(url);
                   if (!response.ok) throw new Error('Could not read generated file');
                   const type = mime || response.headers.get('content-type') || 'application/octet-stream';
                   if (!response.body) throw new Error('Streaming is not supported for this download');
-                  const ready = ArenaNative.beginBlob(name, type);
+                  const ready = await nativeCall('beginBlob', {name:name, mime:type});
                   if (!ready) throw new Error('Could not create destination file');
                   const reader = response.body.getReader();
                   while (true) {
@@ -527,13 +580,13 @@ class MainActivity : Activity() {
                       const slice = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
                       let binary = '';
                       for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
-                      if (!ArenaNative.writeBlobChunk(btoa(binary))) throw new Error('Android could not write the file');
+                      if (!await nativeCall('writeBlobChunk', {data:btoa(binary)})) throw new Error('Android could not write the file');
                     }
                   }
-                  ArenaNative.finishBlobTransfer(true);
+                  await nativeCall('finishBlobTransfer', {success:true});
                 } catch (e) {
-                  ArenaNative.finishBlobTransfer(false);
-                  ArenaNative.reportDownloadError(String(e && e.message ? e.message : e));
+                  await nativeCall('finishBlobTransfer', {success:false});
+                  nativeSend('reportDownloadError', {message:String(e && e.message ? e.message : e)});
                 }
               };
               document.addEventListener('click', function(event) {
@@ -545,7 +598,7 @@ class MainActivity : Activity() {
                 event.stopImmediatePropagation();
                 const name = anchor.getAttribute('download') || 'Arena-download';
                 const mime = anchor.dataset.mime || '';
-                ArenaNative.requestDownload(href, name, mime);
+                nativeSend('requestDownload', {url:href, name:name, mime:mime});
               }, true);
             })();
         """.trimIndent()
@@ -747,6 +800,7 @@ class MainActivity : Activity() {
         finishBlob(false)
         web.stopLoading()
         web.destroy()
+        bridgeExecutor.shutdown()
         if (downloadReceiverRegistered) {
             try { unregisterReceiver(downloadReceiver) } catch (_: Exception) { }
             downloadReceiverRegistered = false
