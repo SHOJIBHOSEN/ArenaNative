@@ -518,9 +518,10 @@ class MainActivity : Activity() {
                 if ((!folder.isDirectory && !folder.mkdirs()) || !folder.isDirectory) {
                     throw IllegalStateException("Download/ArenaNative ফোল্ডার তৈরি করা যায়নি")
                 }
-                testFile = java.io.File(folder, testName)
-                java.io.FileOutputStream(testFile).use { it.write(testBytes) }
-                val verified = testFile!!.inputStream().use { it.readBytes() }
+                val file = java.io.File(folder, testName)
+                testFile = file
+                java.io.FileOutputStream(file).use { it.write(testBytes) }
+                val verified = file.inputStream().use { it.readBytes() }
                 passed = verified.contentEquals(testBytes)
             } else {
                 val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
