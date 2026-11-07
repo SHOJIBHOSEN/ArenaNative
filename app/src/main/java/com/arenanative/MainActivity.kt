@@ -478,7 +478,7 @@ class MainActivity : Activity() {
                         completeFolderSetup()
                         enterArena(savedInstanceState)
                     } else {
-                        status.text = "ফোল্ডার তৈরি করা যায়নি। আবার চেষ্টা করুন।"
+                        status.text = "ফোল্ডারে ১ KB ফাইল লেখা ও পড়ে যাচাই করা যায়নি। আবার চেষ্টা করুন।"
                     }
                 }
             }
