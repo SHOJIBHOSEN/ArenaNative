@@ -9,6 +9,9 @@ A lightweight Android WebView wrapper for the official Arena website. Arena's ow
 - WebView back navigation and HTML5 fullscreen
 - GitHub Actions workflow for debug APK builds
 
+## Feature requirements
+See [Media Saving, App Icon & Battery Requirements](docs/MEDIA_ICON_BATTERY_REQUIREMENTS.md) for the requested image/video saving options, download management, custom app icon, battery-efficiency requirements, security constraints, and acceptance tests. These are requirements to implement and verify, not features claimed to be complete.
+
 ## Build
 Open this repository's **Actions** tab and run **Build Arena APK**, or push a commit to main. Download the artifact named **ArenaNative-debug-apk** from the completed workflow run.
 
