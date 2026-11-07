@@ -369,8 +369,8 @@ class MainActivity : Activity() {
         val screenWidth = resources.configuration.screenWidthDp
         val panelWidth = if (screenWidth > 0) minOf(dp(560), dp(screenWidth - 32).coerceAtLeast(dp(280))) else -1
         val contentFrame = FrameLayout(this)
-        contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.CENTER))
-        scroll.addView(contentFrame, android.widget.ScrollView.LayoutParams(-1, -1))
+        contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
+        scroll.addView(contentFrame, android.widget.ScrollView.LayoutParams(-1, -2))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
 
