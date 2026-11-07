@@ -256,7 +256,8 @@ class MainActivity : Activity() {
                   if (!response.ok) throw new Error('Could not read generated file');
                   const blob = await response.blob();
                   const type = mime || blob.type || 'application/octet-stream';
-                  const ready = ArenaNative.beginBlob(name, type);\n                  if (!ready) throw new Error('Could not create destination file');
+                  const ready = ArenaNative.beginBlob(name, type);
+                  if (!ready) throw new Error('Could not create destination file');
                   const reader = blob.stream().getReader();
                   while (true) {
                     const part = await reader.read();
