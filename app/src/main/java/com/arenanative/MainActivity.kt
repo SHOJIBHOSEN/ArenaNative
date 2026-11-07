@@ -241,8 +241,9 @@ class MainActivity : Activity() {
             textZoom = 100
             allowFileAccess = false
             allowContentAccess = true
-            javaScriptCanOpenWindowsAutomatically = true
+            javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
             if (Build.VERSION.SDK_INT >= 29) {
@@ -251,7 +252,11 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 33) setAlgorithmicDarkeningAllowed(true)
         }
         CookieManager.getInstance().setAcceptCookie(true)
+        // Keep third-party cookies enabled for compatibility with Arena.ai sign-in flows.
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WebView.startSafeBrowsing(applicationContext, null)
+        }
         web.addJavascriptInterface(ArenaBridge(), "ArenaNative")
 
         web.webViewClient = object : WebViewClient() {
@@ -508,18 +513,22 @@ class MainActivity : Activity() {
                 try {
                   const response = await fetch(url);
                   if (!response.ok) throw new Error('Could not read generated file');
-                  const blob = await response.blob();
-                  const type = mime || blob.type || 'application/octet-stream';
+                  const type = mime || response.headers.get('content-type') || 'application/octet-stream';
+                  if (!response.body) throw new Error('Streaming is not supported for this download');
                   const ready = ArenaNative.beginBlob(name, type);
                   if (!ready) throw new Error('Could not create destination file');
-                  const reader = blob.stream().getReader();
+                  const reader = response.body.getReader();
                   while (true) {
                     const part = await reader.read();
                     if (part.done) break;
-                    let binary = '';
                     const bytes = part.value;
-                    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                    if (!ArenaNative.writeBlobChunk(btoa(binary))) throw new Error('Android could not write the file');
+                    // Small chunks keep peak memory low on budget Android phones.
+                    for (let offset = 0; offset < bytes.length; offset += 48 * 1024) {
+                      const slice = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
+                      let binary = '';
+                      for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
+                      if (!ArenaNative.writeBlobChunk(btoa(binary))) throw new Error('Android could not write the file');
+                    }
                   }
                   ArenaNative.finishBlobTransfer(true);
                 } catch (e) {
@@ -554,8 +563,9 @@ class MainActivity : Activity() {
     }
 
     private fun startDownload(url: String, name: String, mime: String) {
-        val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
-        if (scheme !in setOf("http", "https", "blob", "data")) {
+        val parsed = Uri.parse(url)
+        val scheme = parsed.scheme?.lowercase(Locale.ROOT)
+        if (scheme !in setOf("https", "blob", "data")) {
             Toast.makeText(this, "Unsupported download link type: ${scheme ?: "unknown"}", Toast.LENGTH_LONG).show()
             return
         }
@@ -645,7 +655,10 @@ class MainActivity : Activity() {
                 .setDescription("ArenaNative download")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ArenaNative/$name")
-            val cookie = CookieManager.getInstance().getCookie(url)
+            val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
+            val isArenaHost = host == arenaHost || host.endsWith(".$arenaHost")
+            // Never forward Arena.ai cookies to a third-party download host.
+            val cookie = if (isArenaHost) CookieManager.getInstance().getCookie(url) else null
             if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
             val downloadId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
             activeDownloadIds.add(downloadId)
