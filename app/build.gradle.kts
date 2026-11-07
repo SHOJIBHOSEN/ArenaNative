@@ -4,11 +4,11 @@ plugins {
 }
 android {
     namespace = "com.arenanative"
-    compileSdk = 37
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.arenanative"
         minSdk = 24
-        targetSdk = 37
+        targetSdk = 36
         versionCode = 3
         versionName = "1.2.0"
     }
