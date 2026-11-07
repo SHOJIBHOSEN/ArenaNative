@@ -743,14 +743,14 @@ class MainActivity : Activity() {
                         val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
                         contentResolver.update(uri, values, null, null)
                     }
-                    Toast.makeText(this, "Saved to Download/ArenaNative", Toast.LENGTH_LONG).show()
+                    runOnUiThread { Toast.makeText(this, "Saved to Download/ArenaNative", Toast.LENGTH_LONG).show() }
                 } else {
                     contentResolver.delete(uri, null, null)
-                    Toast.makeText(this, "Download failed. Please try again.", Toast.LENGTH_LONG).show()
+                    runOnUiThread { Toast.makeText(this, "Download failed. Please try again.", Toast.LENGTH_LONG).show() }
                 }
             }
         } catch (e: Exception) {
-            Toast.makeText(this, "Could not finish download: ${e.message}", Toast.LENGTH_LONG).show()
+            runOnUiThread { Toast.makeText(this, "Could not finish download: ${e.message}", Toast.LENGTH_LONG).show() }
         } finally {
             blobOutput = null
             blobUri = null
