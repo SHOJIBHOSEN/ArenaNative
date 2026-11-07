@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private var blobDisplayName: String? = null
     private val pickFile = 4102
     private val legacyStoragePermissionRequest = 4103
+    private val folderSetupPermissionRequest = 4104
     private data class PendingDownload(val url: String, val name: String, val mime: String)
     private var pendingDownload: PendingDownload? = null
     private val activeDownloadIds = mutableSetOf<Long>()
@@ -356,9 +357,12 @@ class MainActivity : Activity() {
             minHeight = dp(52)
             setOnClickListener {
                 root.removeView(scroll)
-                web.visibility = View.VISIBLE
-                if (savedInstanceState == null) web.loadUrl("https://arena.ai")
-                else web.restoreState(savedInstanceState)
+                if (getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
+                        .getBoolean("download_folder_ready", false)) {
+                    enterArena(savedInstanceState)
+                } else {
+                    showDownloadFolderSetup(root, savedInstanceState)
+                }
             }
         }
         panel.addView(heading, LinearLayout.LayoutParams(-1, -2))
@@ -372,6 +376,117 @@ class MainActivity : Activity() {
         contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
         scroll.addView(contentFrame, android.widget.ScrollView.LayoutParams(-1, -2))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    }
+
+
+    private fun showDownloadFolderSetup(root: FrameLayout, savedInstanceState: Bundle?) {
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            isVerticalScrollBarEnabled = false
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(dp(24), dp(28), dp(24), dp(28))
+            setBackgroundColor(Color.rgb(18, 18, 18))
+        }
+        val heading = TextView(this).apply {
+            text = "ডাউনলোড ফোল্ডার সেটআপ"
+            textSize = 24f
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER
+        }
+        val message = TextView(this).apply {
+            text = "ডাউনলোড করা ফাইল গুছিয়ে রাখার জন্য Download/ArenaNative ফোল্ডারটি পরীক্ষা করা হবে। ফোল্ডার না থাকলে তৈরি করা হবে। এই সেটআপ শুধু প্রথমবার করতে হবে।"
+            textSize = 16f
+            setTextColor(Color.LTGRAY)
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(20), 0, dp(24))
+        }
+        val status = TextView(this).apply {
+            text = "ফোল্ডার প্রস্তুত করতে নিচের বাটনে চাপ দিন।"
+            textSize = 14f
+            setTextColor(Color.rgb(190, 180, 255))
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 0, 0, dp(20))
+        }
+        val setup = Button(this).apply {
+            text = "ফোল্ডার চেক ও তৈরি করুন"
+            isAllCaps = false
+            minHeight = dp(52)
+            setOnClickListener {
+                status.text = "ফোল্ডার পরীক্ষা করা হচ্ছে..."
+                if (Build.VERSION.SDK_INT in Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
+                    checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(
+                        arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                        folderSetupPermissionRequest
+                    )
+                } else {
+                    if (ensureDownloadFolder()) {
+                        getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
+                            .edit().putBoolean("download_folder_ready", true).apply()
+                        enterArena(savedInstanceState)
+                    } else {
+                        status.text = "ফোল্ডার তৈরি করা যায়নি। আবার চেষ্টা করুন।"
+                    }
+                }
+            }
+        }
+        panel.addView(heading, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(message, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(status, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(setup, LinearLayout.LayoutParams(-1, dp(52)))
+        val screenWidth = resources.configuration.screenWidthDp
+        val panelWidth = if (screenWidth > 0) minOf(dp(560), dp(screenWidth - 32).coerceAtLeast(dp(280))) else -1
+        val contentFrame = FrameLayout(this)
+        contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
+        scroll.addView(contentFrame, android.widget.ScrollView.LayoutParams(-1, -2))
+        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun ensureDownloadFolder(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT < 29) {
+                @Suppress("DEPRECATION")
+                val folder = java.io.File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                    "ArenaNative"
+                )
+                (folder.isDirectory || folder.mkdirs()) && folder.isDirectory
+            } else {
+                val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/"
+                val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                val projection = arrayOf(MediaStore.MediaColumns._ID)
+                val existing = contentResolver.query(
+                    collection,
+                    projection,
+                    "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                    arrayOf(relativePath),
+                    null
+                )
+                val hasEntry = existing?.use { it.moveToFirst() } ?: false
+                if (hasEntry) {
+                    true
+                } else {
+                    // MediaStore creates the public directory when this hidden marker is inserted.
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, ".arenanative")
+                        put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    }
+                    contentResolver.insert(collection, values) != null
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun enterArena(savedInstanceState: Bundle?) {
+        web.visibility = View.VISIBLE
+        if (savedInstanceState == null) web.loadUrl("https://arena.ai")
+        else web.restoreState(savedInstanceState)
     }
 
     private fun installDownloadHook() {
@@ -484,6 +599,17 @@ class MainActivity : Activity() {
         requestCode: Int, permissions: Array<out String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == folderSetupPermissionRequest) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED &&
+                ensureDownloadFolder()) {
+                getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
+                    .edit().putBoolean("download_folder_ready", true).apply()
+                enterArena(null)
+            } else {
+                Toast.makeText(this, "Download ফোল্ডার তৈরি করতে স্টোরেজ অনুমতি প্রয়োজন। আবার চেষ্টা করুন।", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         if (requestCode != legacyStoragePermissionRequest) return
         val pending = pendingDownload
         pendingDownload = null
