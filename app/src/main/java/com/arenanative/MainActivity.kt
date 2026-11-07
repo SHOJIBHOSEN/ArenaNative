@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private var pendingDownload: PendingDownload? = null
     private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
+    private var folderSetupView: View? = null
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
@@ -384,6 +385,7 @@ class MainActivity : Activity() {
             isFillViewport = true
             isVerticalScrollBarEnabled = false
         }
+        folderSetupView = scroll
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = android.view.Gravity.CENTER
@@ -426,6 +428,7 @@ class MainActivity : Activity() {
                     if (ensureDownloadFolder()) {
                         getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                             .edit().putBoolean("download_folder_ready", true).apply()
+                        completeFolderSetup()
                         enterArena(savedInstanceState)
                     } else {
                         status.text = "ফোল্ডার তৈরি করা যায়নি। আবার চেষ্টা করুন।"
@@ -443,6 +446,13 @@ class MainActivity : Activity() {
         contentFrame.addView(panel, FrameLayout.LayoutParams(panelWidth, -2, android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL))
         scroll.addView(contentFrame, FrameLayout.LayoutParams(-1, -2))
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private fun completeFolderSetup() {
+        folderSetupView?.let { view ->
+            (view.parent as? ViewGroup)?.removeView(view)
+        }
+        folderSetupView = null
     }
 
     private fun ensureDownloadFolder(): Boolean {
@@ -604,6 +614,7 @@ class MainActivity : Activity() {
                 ensureDownloadFolder()) {
                 getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                     .edit().putBoolean("download_folder_ready", true).apply()
+                completeFolderSetup()
                 enterArena(null)
             } else {
                 Toast.makeText(this, "Download ফোল্ডার তৈরি করতে স্টোরেজ অনুমতি প্রয়োজন। আবার চেষ্টা করুন।", Toast.LENGTH_LONG).show()
