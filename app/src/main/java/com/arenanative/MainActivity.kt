@@ -74,35 +74,34 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
+        @Synchronized
         fun beginBlob(name: String, mime: String) {
-            runOnUiThread {
-                if (!isTrustedArena()) return@runOnUiThread
-                try {
-                    finishBlob(false)
-                    val safeName = cleanFileName(name)
-                    val values = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
-                        if (Build.VERSION.SDK_INT >= 29) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
-                            put(MediaStore.MediaColumns.IS_PENDING, 1)
-                        }
+            if (!isTrustedArena()) return
+            try {
+                finishBlob(false)
+                val safeName = cleanFileName(name)
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
+                        put(MediaStore.MediaColumns.IS_PENDING, 1)
                     }
-                    val collection = if (Build.VERSION.SDK_INT >= 29) {
-                        MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    } else {
-                        MediaStore.Files.getContentUri("external")
-                    }
-                    blobUri = contentResolver.insert(collection, values)
-                        ?: throw IllegalStateException("Could not create download file")
-                    blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
-                        ?: throw IllegalStateException("Could not open download file")
-                    blobDisplayName = safeName
-                } catch (e: Exception) {
-                    finishBlob(false)
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
+                }
+                val collection = if (Build.VERSION.SDK_INT >= 29) {
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                } else {
+                    MediaStore.Files.getContentUri("external")
+                }
+                blobUri = contentResolver.insert(collection, values)
+                    ?: throw IllegalStateException("Could not create download file")
+                blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
+                    ?: throw IllegalStateException("Could not open download file")
+                blobDisplayName = safeName
+            } catch (e: Exception) {
+                finishBlob(false)
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }
