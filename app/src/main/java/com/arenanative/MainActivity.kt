@@ -256,7 +256,7 @@ class MainActivity : Activity() {
                 const anchor = event.target && event.target.closest ? event.target.closest('a[download]') : null;
                 if (!anchor) return;
                 const href = anchor.href || '';
-                if (!href.startsWith('blob:') && !/^https?:/i.test(href)) return;
+                if (!href.startsWith('blob:') && !href.startsWith('data:') && !/^https?:/i.test(href)) return;
                 event.preventDefault();
                 event.stopImmediatePropagation();
                 const name = anchor.getAttribute('download') || 'Arena-download';
