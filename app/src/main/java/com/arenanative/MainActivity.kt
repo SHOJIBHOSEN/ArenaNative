@@ -61,13 +61,7 @@ class MainActivity : Activity() {
                     .setMessage("$safeName\n\nSave the original file to Download/ArenaNative?")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Download") { _, _ ->
-                        if (url.startsWith("blob:", true)) {
-                            val js = "window.__arenaNativeFetchBlob && window.__arenaNativeFetchBlob(" +
-                                "${JSONObject.quote(url)},${JSONObject.quote(safeName)},${JSONObject.quote(mime)})"
-                            web.evaluateJavascript(js, null)
-                        } else {
-                            enqueueHttpDownload(url, safeName, mime)
-                        }
+                        startDownload(url, safeName, mime)
                     }
                     .show()
             }
@@ -280,8 +274,21 @@ class MainActivity : Activity() {
             .setTitle("Download file?")
             .setMessage("${cleanFileName(name)}\n\nSave to Download/ArenaNative?")
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Download") { _, _ -> enqueueHttpDownload(url, cleanFileName(name), mime ?: "") }
+            .setPositiveButton("Download") { _, _ -> startDownload(url, cleanFileName(name), mime ?: "") }
             .show()
+    }
+
+    private fun startDownload(url: String, name: String, mime: String) {
+        val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
+        when (scheme) {
+            "http", "https" -> enqueueHttpDownload(url, name, mime)
+            "blob", "data" -> {
+                val js = "window.__arenaNativeFetchBlob && window.__arenaNativeFetchBlob(" +
+                    "${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)})"
+                web.evaluateJavascript(js, null)
+            }
+            else -> Toast.makeText(this, "Unsupported download link type: ${scheme ?: "unknown"}", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun enqueueHttpDownload(url: String, name: String, mime: String) {
