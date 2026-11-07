@@ -1,10 +1,12 @@
 package com.arenanative
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
 import android.content.ContentValues
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -42,6 +44,9 @@ class MainActivity : Activity() {
     private var blobUri: Uri? = null
     private var blobDisplayName: String? = null
     private val pickFile = 4102
+    private val legacyStoragePermissionRequest = 4103
+    private data class PendingDownload(val url: String, val name: String, val mime: String)
+    private var pendingDownload: PendingDownload? = null
     private val arenaHost = "arena.ai"
     private val downloadFolder = "Download/ArenaNative"
 
@@ -68,34 +73,35 @@ class MainActivity : Activity() {
         }
 
         @JavascriptInterface
-        @Synchronized
         fun beginBlob(name: String, mime: String) {
             if (!isTrustedArena()) return
-            try {
-                finishBlob(false)
-                val safeName = cleanFileName(name)
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
-                    put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
+            synchronized(this@MainActivity) {
+                try {
+                    finishBlob(false)
+                    val safeName = cleanFileName(name)
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, mime.ifBlank { "application/octet-stream" })
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.MediaColumns.RELATIVE_PATH, downloadFolder)
+                            put(MediaStore.MediaColumns.IS_PENDING, 1)
+                        }
                     }
-                }
-                val collection = if (Build.VERSION.SDK_INT >= 29) {
-                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                } else {
-                    MediaStore.Files.getContentUri("external")
-                }
-                blobUri = contentResolver.insert(collection, values)
-                    ?: throw IllegalStateException("Could not create download file")
-                blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
-                    ?: throw IllegalStateException("Could not open download file")
-                blobDisplayName = safeName
-            } catch (e: Exception) {
-                finishBlob(false)
-                runOnUiThread {
-                    Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    val collection = if (Build.VERSION.SDK_INT >= 29) {
+                        MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                    } else {
+                        MediaStore.Files.getContentUri("external")
+                    }
+                    blobUri = contentResolver.insert(collection, values)
+                        ?: throw IllegalStateException("Could not create download file")
+                    blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
+                        ?: throw IllegalStateException("Could not open download file")
+                    blobDisplayName = safeName
+                } catch (e: Exception) {
+                    finishBlob(false)
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
@@ -280,14 +286,47 @@ class MainActivity : Activity() {
 
     private fun startDownload(url: String, name: String, mime: String) {
         val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
-        when (scheme) {
+        if (scheme !in setOf("http", "https", "blob", "data")) {
+            Toast.makeText(this, "Unsupported download link type: ${scheme ?: "unknown"}", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        // Android 6–9 require WRITE_EXTERNAL_STORAGE for public Downloads.
+        // Android 10+ use scoped storage / MediaStore and must not request it.
+        if (Build.VERSION.SDK_INT in Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingDownload = PendingDownload(url, name, mime)
+            requestPermissions(
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                legacyStoragePermissionRequest
+            )
+            return
+        }
+        continueDownload(url, name, mime)
+    }
+
+    private fun continueDownload(url: String, name: String, mime: String) {
+        when (Uri.parse(url).scheme?.lowercase(Locale.ROOT)) {
             "http", "https" -> enqueueHttpDownload(url, name, mime)
             "blob", "data" -> {
                 val js = "window.__arenaNativeFetchBlob && window.__arenaNativeFetchBlob(" +
                     "${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)})"
                 web.evaluateJavascript(js, null)
             }
-            else -> Toast.makeText(this, "Unsupported download link type: ${scheme ?: "unknown"}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != legacyStoragePermissionRequest) return
+        val pending = pendingDownload
+        pendingDownload = null
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED && pending != null) {
+            continueDownload(pending.url, pending.name, pending.mime)
+        } else {
+            Toast.makeText(this, "Storage permission is required to save downloads on Android 9 and older.", Toast.LENGTH_LONG).show()
         }
     }
 
