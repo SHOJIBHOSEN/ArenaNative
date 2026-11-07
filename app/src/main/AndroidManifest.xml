@@ -6,7 +6,7 @@
         android:maxSdkVersion="28" />
     <application
         android:allowBackup="false"
-        android:label="ArenaNative"
+        android:label="Arena.ai"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:theme="@style/AppTheme"
