@@ -29,6 +29,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.Toast
 import android.util.Base64
@@ -161,10 +164,7 @@ class MainActivity : Activity() {
                 }
                 true
             } catch (e: Exception) {
-                runOnUiThread {
-                    finishBlob(false)
-                    Toast.makeText(this@MainActivity, "Download write failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
+                runOnUiThread { finishBlob(false) }
                 false
             }
         }
@@ -172,10 +172,7 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun reportDownloadError(message: String) {
             if (!isTrustedArena()) return
-            runOnUiThread {
-                finishBlob(false)
-                Toast.makeText(this@MainActivity, "Download failed: ${message.take(180)}", Toast.LENGTH_LONG).show()
-            }
+            runOnUiThread { finishBlob(false) }
         }
 
         @JavascriptInterface
@@ -218,6 +215,7 @@ class MainActivity : Activity() {
         }
 
         web = WebView(this)
+        web.visibility = View.GONE
         progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
         root.addView(web, FrameLayout.LayoutParams(-1, -1))
         root.addView(progress, FrameLayout.LayoutParams(-1, dp(3)))
@@ -253,8 +251,12 @@ class MainActivity : Activity() {
 
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                updateTrustedArenaPage(request.url.toString())
+                if (request.isForMainFrame) updateTrustedArenaPage(request.url.toString())
                 return false
+            }
+            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                updateTrustedArenaPage(url)
             }
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
@@ -300,8 +302,60 @@ class MainActivity : Activity() {
         web.setDownloadListener(DownloadListener { url, userAgent, disposition, mime, _ ->
             if (isTrustedArena()) showDownloadConfirmation(url, android.webkit.URLUtil.guessFileName(url, disposition, mime), mime)
         })
-        if (savedInstanceState == null) web.loadUrl("https://arena.ai")
-        else web.restoreState(savedInstanceState)
+        showDuroodWelcome(root, savedInstanceState)
+    }
+
+    private fun showDuroodWelcome(root: FrameLayout, savedInstanceState: Bundle?) {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = android.view.Gravity.CENTER
+            setPadding(dp(28), dp(32), dp(28), dp(32))
+            setBackgroundColor(Color.rgb(18, 18, 18))
+        }
+        val heading = TextView(this).apply {
+            text = "Arena.ai"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER
+        }
+        val message = TextView(this).apply {
+            text = "অ্যাপ ব্যবহারের আগে প্রিয় নবী হজরত মুহাম্মদ (সা.)-এর ওপর ৩ বার দরুদ পাঠ করুন।"
+            textSize = 19f
+            setTextColor(Color.WHITE)
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(28), 0, dp(20))
+        }
+        val arabic = TextView(this).apply {
+            text = "اللَّهُمَّ صَلِّ عَلَىٰ مُحَمَّدٍ وَعَلَىٰ آلِ مُحَمَّدٍ"
+            textSize = 24f
+            setTextColor(Color.rgb(190, 180, 255))
+            gravity = android.view.Gravity.CENTER
+            textDirection = View.TEXT_DIRECTION_RTL
+            setPadding(0, dp(8), 0, dp(24))
+        }
+        val instruction = TextView(this).apply {
+            text = "দরুদ পাঠ শেষ হলে নিচের ‘পরবর্তী’ বাটনে চাপ দিন।"
+            textSize = 15f
+            setTextColor(Color.LTGRAY)
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, 0, 0, dp(28))
+        }
+        val next = Button(this).apply {
+            text = "পরবর্তী"
+            isAllCaps = false
+            setOnClickListener {
+                root.removeView(panel)
+                web.visibility = View.VISIBLE
+                if (savedInstanceState == null) web.loadUrl("https://arena.ai")
+                else web.restoreState(savedInstanceState)
+            }
+        }
+        panel.addView(heading, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(message, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(arabic, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(instruction, LinearLayout.LayoutParams(-1, -2))
+        panel.addView(next, LinearLayout.LayoutParams(-1, dp(52)))
+        root.addView(panel, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun installDownloadHook() {
