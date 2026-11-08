@@ -501,6 +501,7 @@ class MainActivity : Activity() {
                     if (verifyDownloadFolderWrite()) {
                         getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                             .edit().putBoolean("download_folder_ready", true).apply()
+                        Toast.makeText(this@MainActivity, "ফোল্ডার যাচাই সফল। ১ KB test file: Download/ArenaNative", Toast.LENGTH_LONG).show()
                         completeFolderSetup()
                         enterArena(savedInstanceState)
                     } else {
