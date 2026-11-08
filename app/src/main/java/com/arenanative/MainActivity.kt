@@ -322,10 +322,12 @@ class MainActivity : Activity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             cacheMode = WebSettings.LOAD_DEFAULT
             mediaPlaybackRequiresUserGesture = false
+            // Arena.ai already provides its own dark theme. Avoid forcing
+            // WebView to recolor the page or applying a second darkening pass.
             if (Build.VERSION.SDK_INT >= 29) {
-                @Suppress("DEPRECATION") forceDark = WebSettings.FORCE_DARK_ON
+                @Suppress("DEPRECATION") forceDark = WebSettings.FORCE_DARK_OFF
             }
-            if (Build.VERSION.SDK_INT >= 33) setAlgorithmicDarkeningAllowed(true)
+            if (Build.VERSION.SDK_INT >= 33) setAlgorithmicDarkeningAllowed(false)
         }
         CookieManager.getInstance().setAcceptCookie(true)
         // Keep third-party cookies enabled for compatibility with Arena.ai sign-in flows.
