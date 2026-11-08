@@ -647,7 +647,7 @@ class MainActivity : Activity() {
     private fun startDownload(url: String, name: String, mime: String) {
         val parsed = Uri.parse(url)
         val scheme = parsed.scheme?.lowercase(Locale.ROOT)
-        if (scheme !in setOf("https", "blob", "data")) {
+        if (scheme !in setOf("http", "https", "blob", "data")) {
             Toast.makeText(this, "Unsupported download link type: ${scheme ?: "unknown"}", Toast.LENGTH_LONG).show()
             return
         }
@@ -673,7 +673,9 @@ class MainActivity : Activity() {
                 // These URLs are scoped to this WebView; they must be saved by the native bridge.
                 val js = "if (window.__arenaNativeFetchBlob) {" +
                     "window.__arenaNativeFetchBlob(${JSONObject.quote(url)},${JSONObject.quote(name)},${JSONObject.quote(mime)});" +
-                    "} else { ArenaNative.reportDownloadError('Download handler is not ready. Reload Arena.ai and try again.'); }"
+                    "} else if (window.ArenaNative && typeof window.ArenaNative.postMessage === 'function') {" +
+                    "window.ArenaNative.postMessage(JSON.stringify({action:'reportDownloadError'}));" +
+                    "} else { console.error('ArenaNative download bridge is not ready'); }"
                 web.evaluateJavascript(js, null)
             }
             else -> Toast.makeText(this, "Unsupported download link type", Toast.LENGTH_LONG).show()
