@@ -58,6 +58,7 @@ class MainActivity : Activity() {
     private data class PendingDownload(val url: String, val name: String, val mime: String)
     private var pendingDownload: PendingDownload? = null
     private var pendingBlobPermissionDownloadId: String? = null
+    private var blobDownloadReserved = false
     private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
     private var folderSetupView: View? = null
@@ -789,9 +790,17 @@ class MainActivity : Activity() {
     }
 
     private fun confirmBlobDownloadAfterPermission(downloadId: String) {
-        if (pendingBlobPermissionDownloadId != null || pendingDownload != null) {
+        val reserved = synchronized(this) {
+            if (blobDownloadReserved || pendingBlobPermissionDownloadId != null || pendingDownload != null) {
+                false
+            } else {
+                blobDownloadReserved = true
+                true
+            }
+        }
+        if (!reserved) {
             confirmBlobDownloadInWebView(downloadId, false)
-            Toast.makeText(this, "Finish the current download permission request first.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Another file is already downloading. Try again when it finishes.", Toast.LENGTH_LONG).show()
             return
         }
         if (Build.VERSION.SDK_INT in Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
@@ -891,6 +900,7 @@ class MainActivity : Activity() {
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             confirmBlobDownloadInWebView(pendingBlobId, granted)
             if (!granted) {
+                synchronized(this) { blobDownloadReserved = false }
                 Toast.makeText(this, "Storage permission is required to save downloads on Android 9 and older.", Toast.LENGTH_LONG).show()
             }
             return
@@ -974,6 +984,7 @@ class MainActivity : Activity() {
             blobOutput = null
             blobUri = null
             blobDisplayName = null
+            blobDownloadReserved = false
         }
     }
 
