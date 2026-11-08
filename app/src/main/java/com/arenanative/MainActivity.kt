@@ -65,6 +65,10 @@ class MainActivity : Activity() {
     private var lastFolderCheckError: String = ""
     private val bridgeExecutor = Executors.newSingleThreadExecutor()
     private var bridgeAvailable = false
+    private var rendererRecoveryRequested = false
+    private var mainFrameLoadStartedAt = 0L
+    private val diagnosticsTag = "ArenaNativeWebView"
+    private val rendererRecoveryStateKey = "arena_renderer_recovery"
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
@@ -261,6 +265,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        rendererRecoveryRequested = savedInstanceState?.getBoolean(rendererRecoveryStateKey, false) == true
         window.statusBarColor = Color.rgb(18, 18, 18)
         window.navigationBarColor = Color.rgb(18, 18, 18)
         if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
@@ -359,14 +364,76 @@ class MainActivity : Activity() {
             override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 updateTrustedArenaPage(url)
+                mainFrameLoadStartedAt = android.os.SystemClock.elapsedRealtime()
+                android.util.Log.d(diagnosticsTag, "Main frame navigation started: ${diagnosticUrl(url)}")
             }
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
                 updateTrustedArenaPage(url)
+                val elapsed = if (mainFrameLoadStartedAt > 0L) {
+                    android.os.SystemClock.elapsedRealtime() - mainFrameLoadStartedAt
+                } else -1L
+                android.util.Log.d(diagnosticsTag, "Main frame navigation finished in ${elapsed}ms: ${diagnosticUrl(url)}")
+                mainFrameLoadStartedAt = 0L
                 if (isTrustedArena()) installDownloadHook()
+            }
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: android.webkit.WebResourceError
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request.isForMainFrame) {
+                    android.util.Log.e(
+                        diagnosticsTag,
+                        "Main frame load error code=${error.errorCode}, description=${error.description}, url=${diagnosticUrl(request.url.toString())}"
+                    )
+                }
+            }
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                response: android.webkit.WebResourceResponse
+            ) {
+                super.onReceivedHttpError(view, request, response)
+                if (request.isForMainFrame) {
+                    android.util.Log.e(
+                        diagnosticsTag,
+                        "Main frame HTTP error status=${response.statusCode}, reason=${response.reasonPhrase}, url=${diagnosticUrl(request.url.toString())}"
+                    )
+                }
+            }
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                android.util.Log.e(
+                    diagnosticsTag,
+                    "WebView renderer exited: didCrash=${detail.didCrash()}, priorityAtExit=${detail.rendererPriorityAtExit()}"
+                )
+                rendererRecoveryRequested = true
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Arena.ai-এর WebView বন্ধ হয়ে গিয়েছিল। অ্যাপটি নিরাপদে পুনরায় চালু হচ্ছে।",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        recreate()
+                    }
+                }
+                return true
             }
         }
         web.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: WebChromeClient.ConsoleMessage): Boolean {
+                val source = diagnosticUrl(message.sourceId())
+                when (message.messageLevel()) {
+                    WebChromeClient.ConsoleMessage.MessageLevel.ERROR ->
+                        android.util.Log.e(diagnosticsTag, "Page JavaScript error at ${source}:${message.lineNumber()}")
+                    WebChromeClient.ConsoleMessage.MessageLevel.WARNING ->
+                        android.util.Log.w(diagnosticsTag, "Page JavaScript warning at ${source}:${message.lineNumber()}")
+                    else -> Unit
+                }
+                return true
+            }
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
                 progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
@@ -652,10 +719,23 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun diagnosticUrl(rawUrl: String?): String {
+        return try {
+            Uri.parse(rawUrl ?: "").buildUpon().clearQuery().fragment(null).build().toString()
+        } catch (_: Exception) {
+            "(invalid-url)"
+        }
+    }
+
     private fun enterArena(savedInstanceState: Bundle?) {
         web.visibility = View.VISIBLE
-        if (savedInstanceState == null) web.loadUrl("https://arena.ai")
-        else web.restoreState(savedInstanceState)
+        if (savedInstanceState == null || rendererRecoveryRequested ||
+            savedInstanceState.getBoolean(rendererRecoveryStateKey, false)
+        ) {
+            web.loadUrl("https://arena.ai")
+        } else {
+            web.restoreState(savedInstanceState)
+        }
     }
 
     private fun installDownloadHook() {
@@ -1011,8 +1091,22 @@ class MainActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        web.saveState(outState)
+        if (rendererRecoveryRequested) {
+            outState.putBoolean(rendererRecoveryStateKey, true)
+        } else if (::web.isInitialized) {
+            web.saveState(outState)
+        }
         super.onSaveInstanceState(outState)
+    }
+
+    override fun onPause() {
+        if (::web.isInitialized) web.onPause()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::web.isInitialized) web.onResume()
     }
 
     override fun onBackPressed() {
