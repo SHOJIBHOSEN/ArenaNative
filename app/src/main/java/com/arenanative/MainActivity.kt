@@ -125,19 +125,49 @@ class MainActivity : Activity() {
         when (action) {
             "requestDownload" -> {
                 val url = message.optString("url")
-                val name = cleanFileName(message.optString("name"))
                 val mime = message.optString("mime")
+                val suppliedName = message.optString("name")
+                val guessedName = android.webkit.URLUtil.guessFileName(url, null, mime)
+                val name = cleanFileName(suppliedName.ifBlank { guessedName })
                 runOnUiThread {
                     if (url.isBlank()) {
                         Toast.makeText(this, "Download link was not provided by Arena.ai.", Toast.LENGTH_LONG).show()
                     } else {
                         AlertDialog.Builder(this)
                             .setTitle("Download file?")
-                            .setMessage("$name\\n\\nSave the original file to Download/ArenaNative?")
+                            .setMessage("$name\n\nSave the original file to Download/ArenaNative?")
                             .setNegativeButton("Cancel", null)
                             .setPositiveButton("Download") { _, _ -> startDownload(url, name, mime) }
                             .show()
                     }
+                }
+            }
+            "requestBlobDownload" -> {
+                val downloadId = message.optString("downloadId")
+                val name = cleanFileName(message.optString("name").ifBlank { "Arena-download" })
+                runOnUiThread {
+                    AlertDialog.Builder(this)
+                        .setTitle("Download file?")
+                        .setMessage("$name\n\nSave the original file to Download/ArenaNative?")
+                        .setNegativeButton("Cancel") { _, _ ->
+                            web.evaluateJavascript(
+                                "window.__arenaNativeConfirmBlobDownload && window.__arenaNativeConfirmBlobDownload(" + JSONObject.quote(downloadId) + ",false)",
+                                null
+                            )
+                        }
+                        .setPositiveButton("Download") { _, _ ->
+                            web.evaluateJavascript(
+                                "window.__arenaNativeConfirmBlobDownload && window.__arenaNativeConfirmBlobDownload(" + JSONObject.quote(downloadId) + ",true)",
+                                null
+                            )
+                        }
+                        .setOnCancelListener {
+                            web.evaluateJavascript(
+                                "window.__arenaNativeConfirmBlobDownload && window.__arenaNativeConfirmBlobDownload(" + JSONObject.quote(downloadId) + ",false)",
+                                null
+                            )
+                        }
+                        .show()
                 }
             }
             "beginBlob" -> bridgeExecutor.execute {
@@ -161,8 +191,8 @@ class MainActivity : Activity() {
             }
             "finishBlobTransfer" -> bridgeExecutor.execute {
                 val success = message.optBoolean("success", false)
-                runOnUiThread { finishBlob(success) }
-                replyToBridge(reply, id, true)
+                val finished = finishBlob(success)
+                replyToBridge(reply, id, finished)
             }
             "reportDownloadError" -> bridgeExecutor.execute {
                 runOnUiThread { finishBlob(false) }
@@ -174,7 +204,9 @@ class MainActivity : Activity() {
     private fun beginBlobFile(name: String, mime: String): Boolean {
         return synchronized(this) {
             try {
-                finishBlob(false)
+                if (blobOutput != null || blobUri != null) {
+                    throw IllegalStateException("Another download is already being saved")
+                }
                 val safeName = cleanFileName(name)
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
@@ -638,30 +670,47 @@ class MainActivity : Activity() {
               function nativeSend(action, fields) {
                 window.ArenaNative.postMessage(JSON.stringify(Object.assign({action:action}, fields || {})));
               }
+              async function transferBlobResponse(response, name, mime) {
+                if (!response.ok) throw new Error('Could not read generated file');
+                if (!response.body) throw new Error('Streaming is not supported for this download');
+                const type = mime || response.headers.get('content-type') || 'application/octet-stream';
+                const ready = await nativeCall('beginBlob', {name:name, mime:type});
+                if (!ready) throw new Error('Could not create destination file');
+                const reader = response.body.getReader();
+                while (true) {
+                  const part = await reader.read();
+                  if (part.done) break;
+                  const bytes = part.value;
+                  for (let offset = 0; offset < bytes.length; offset += 48 * 1024) {
+                    const slice = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
+                    let binary = '';
+                    for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
+                    if (!await nativeCall('writeBlobChunk', {data:btoa(binary)})) {
+                      throw new Error('Android could not write the file');
+                    }
+                  }
+                }
+                if (!await nativeCall('finishBlobTransfer', {success:true})) {
+                  throw new Error('Android could not finalize the saved file');
+                }
+              }
               window.__arenaNativeFetchBlob = async function(url, name, mime) {
                 try {
                   const response = await fetch(url);
-                  if (!response.ok) throw new Error('Could not read generated file');
-                  const type = mime || response.headers.get('content-type') || 'application/octet-stream';
-                  if (!response.body) throw new Error('Streaming is not supported for this download');
-                  const ready = await nativeCall('beginBlob', {name:name, mime:type});
-                  if (!ready) throw new Error('Could not create destination file');
-                  const reader = response.body.getReader();
-                  while (true) {
-                    const part = await reader.read();
-                    if (part.done) break;
-                    const bytes = part.value;
-                    for (let offset = 0; offset < bytes.length; offset += 48 * 1024) {
-                      const slice = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
-                      let binary = '';
-                      for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
-                      if (!await nativeCall('writeBlobChunk', {data:btoa(binary)})) throw new Error('Android could not write the file');
-                    }
-                  }
-                  await nativeCall('finishBlobTransfer', {success:true});
+                  await transferBlobResponse(response, name, mime);
                 } catch (e) {
                   nativeSend('reportDownloadError');
                 }
+              };
+              const pendingBlobDownloads = new Map();
+              window.__arenaNativeConfirmBlobDownload = function(downloadId, approved) {
+                const pending = pendingBlobDownloads.get(downloadId);
+                if (!pending) return;
+                pendingBlobDownloads.delete(downloadId);
+                if (!approved) return;
+                pending.responsePromise.then(response =>
+                  transferBlobResponse(response, pending.name, pending.mime)
+                ).catch(() => nativeSend('reportDownloadError'));
               };
               function handleDownloadClick(event) {
                 const target = event.target;
@@ -672,13 +721,33 @@ class MainActivity : Activity() {
                 const downloadName = anchor.getAttribute('download') || anchor.download || '';
                 const isBlobOrData = /^(blob:|data:)/i.test(href);
                 const isFileUrl = /^https?:/i.test(href) &&
-                  (/\\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|txt|png|jpe?g|webp|mp[34]|json)(?:$|[?#])/i.test(href) ||
+                  (/\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|txt|png|jpe?g|webp|mp[34]|json)(?:$|[?#])/i.test(href) ||
                    /(?:download|export|attachment|file)=?/i.test(href));
-                if (!downloadName && !isBlobOrData && !isFileUrl) return;
-                if (!isBlobOrData && !isFileUrl && !/^https?:/i.test(href)) return;
-                event.preventDefault();
-                const name = downloadName || anchor.getAttribute('aria-label') || 'Arena-download';
+                const name = downloadName || anchor.getAttribute('aria-label') || '';
                 const mime = anchor.dataset ? (anchor.dataset.mime || '') : '';
+                if (isBlobOrData) {
+                  event.preventDefault();
+                  const downloadId = 'blob-' + String(++nativeRequestId);
+                  const responsePromise = fetch(href).then(response => {
+                    if (!response.ok) throw new Error('Could not read generated file');
+                    return response;
+                  });
+                  responsePromise.catch(() => {});
+                  pendingBlobDownloads.set(downloadId, {
+                    responsePromise:responsePromise,
+                    name:name || 'Arena-download',
+                    mime:mime
+                  });
+                  nativeSend('requestBlobDownload', {
+                    downloadId:downloadId,
+                    name:name || 'Arena-download',
+                    mime:mime
+                  });
+                  return;
+                }
+                if (!name && !isFileUrl) return;
+                if (!/^https?:/i.test(href)) return;
+                event.preventDefault();
                 nativeSend('requestDownload', {url:href, name:name, mime:mime});
               }
               document.addEventListener('click', handleDownloadClick, true);
@@ -787,17 +856,19 @@ class MainActivity : Activity() {
                 return
             }
             val request = DownloadManager.Request(uri)
-                .setMimeType(mime)
+                .setMimeType(mime.ifBlank { "application/octet-stream" })
                 .addRequestHeader("User-Agent", web.settings.userAgentString)
                 .setTitle(name)
                 .setDescription("ArenaNative download")
                 .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "ArenaNative/$name")
-            val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
-            val isArenaHost = host == arenaHost || host.endsWith(".$arenaHost")
-            // Never forward Arena.ai cookies to a third-party download host.
-            val cookie = if (isArenaHost) CookieManager.getInstance().getCookie(url) else null
+            // CookieManager returns only cookies applicable to this exact download URL.
+            // This supports authenticated CDN links without leaking Arena.ai cookies cross-domain.
+            val cookie = CookieManager.getInstance().getCookie(url)
             if (!cookie.isNullOrBlank()) request.addRequestHeader("Cookie", cookie)
+            web.url?.let { pageUrl ->
+                request.addRequestHeader("Referer", pageUrl)
+            }
             val downloadId = (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
             activeDownloadIds.add(downloadId)
             Toast.makeText(this, "Download started. Check notification for progress.", Toast.LENGTH_LONG).show()
@@ -807,26 +878,42 @@ class MainActivity : Activity() {
     }
 
     @Synchronized
-    private fun finishBlob(success: Boolean) {
-        try {
+    private fun finishBlob(success: Boolean): Boolean {
+        val uri = blobUri
+        return try {
             blobOutput?.flush()
             blobOutput?.close()
             blobOutput = null
-            val uri = blobUri
-            if (uri != null) {
-                if (success) {
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        val values = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-                        contentResolver.update(uri, values, null, null)
+            if (uri == null) {
+                if (success) throw IllegalStateException("Download output was not open")
+                return false
+            }
+            if (success) {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
                     }
-                    runOnUiThread { Toast.makeText(this, "Saved to Download/ArenaNative", Toast.LENGTH_LONG).show() }
-                } else {
-                    contentResolver.delete(uri, null, null)
-                    runOnUiThread { Toast.makeText(this, "Download failed. Please try again.", Toast.LENGTH_LONG).show() }
+                    if (contentResolver.update(uri, values, null, null) <= 0) {
+                        throw IllegalStateException("Could not publish the completed download")
+                    }
                 }
+                runOnUiThread {
+                    Toast.makeText(this, "Saved to Download/ArenaNative", Toast.LENGTH_LONG).show()
+                }
+                true
+            } else {
+                contentResolver.delete(uri, null, null)
+                runOnUiThread {
+                    Toast.makeText(this, "Download failed. Please try again.", Toast.LENGTH_LONG).show()
+                }
+                false
             }
         } catch (e: Exception) {
-            runOnUiThread { Toast.makeText(this, "Could not finish download: ${e.message}", Toast.LENGTH_LONG).show() }
+            try { uri?.let { contentResolver.delete(it, null, null) } } catch (_: Exception) { }
+            runOnUiThread {
+                Toast.makeText(this, "Could not finish download: " + e.message, Toast.LENGTH_LONG).show()
+            }
+            false
         } finally {
             blobOutput = null
             blobUri = null
