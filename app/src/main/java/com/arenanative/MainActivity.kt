@@ -201,6 +201,8 @@ class MainActivity : Activity() {
 
     private fun beginBlobFile(name: String, mime: String): Boolean {
         return synchronized(this) {
+            var createdUri: Uri? = null
+            var createdOutput: OutputStream? = null
             try {
                 if (blobOutput != null || blobUri != null) {
                     throw IllegalStateException("Another download is already being saved")
@@ -230,16 +232,26 @@ class MainActivity : Activity() {
                 } else {
                     MediaStore.Files.getContentUri("external")
                 }
-                blobUri = contentResolver.insert(collection, values)
+                val newUri = contentResolver.insert(collection, values)
                     ?: throw IllegalStateException("Could not create download file")
-                blobOutput = contentResolver.openOutputStream(blobUri!!, "w")
+                createdUri = newUri
+                val newOutput = contentResolver.openOutputStream(newUri, "w")
                     ?: throw IllegalStateException("Could not open download file")
+                createdOutput = newOutput
+                blobUri = newUri
+                blobOutput = newOutput
                 blobDisplayName = safeName
                 true
             } catch (e: Exception) {
-                finishBlob(false)
+                try { createdOutput?.close() } catch (_: Exception) { }
+                try { createdUri?.let { contentResolver.delete(it, null, null) } } catch (_: Exception) { }
+                if (createdUri != null && blobUri == createdUri) {
+                    blobOutput = null
+                    blobUri = null
+                    blobDisplayName = null
+                }
                 runOnUiThread {
-                    Toast.makeText(this, "Download failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Download failed: " + e.message, Toast.LENGTH_LONG).show()
                 }
                 false
             }
@@ -777,6 +789,11 @@ class MainActivity : Activity() {
     }
 
     private fun confirmBlobDownloadAfterPermission(downloadId: String) {
+        if (pendingBlobPermissionDownloadId != null || pendingDownload != null) {
+            confirmBlobDownloadInWebView(downloadId, false)
+            Toast.makeText(this, "Finish the current download permission request first.", Toast.LENGTH_LONG).show()
+            return
+        }
         if (Build.VERSION.SDK_INT in Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
             checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             pendingBlobPermissionDownloadId = downloadId
