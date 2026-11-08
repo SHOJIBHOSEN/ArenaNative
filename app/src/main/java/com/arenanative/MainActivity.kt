@@ -60,6 +60,7 @@ class MainActivity : Activity() {
     private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
     private var folderSetupView: View? = null
+    private var lastFolderCheckError: String = ""
     private val bridgeExecutor = Executors.newSingleThreadExecutor()
     private var bridgeAvailable = false
     @Volatile private var confirmedMenuDownload = false
@@ -504,7 +505,7 @@ class MainActivity : Activity() {
                         completeFolderSetup()
                         enterArena(savedInstanceState)
                     } else {
-                        status.text = "ফোল্ডারে ১ KB ফাইল লেখা ও পড়ে যাচাই করা যায়নি। আবার চেষ্টা করুন।"
+                        status.text = "ফোল্ডার পরীক্ষা ব্যর্থ: $lastFolderCheckError"
                     }
                 }
             }
@@ -529,6 +530,7 @@ class MainActivity : Activity() {
     }
 
     private fun verifyDownloadFolderWrite(): Boolean {
+        lastFolderCheckError = ""
         // Keep one visible 1 KB probe file so the user can verify the exact destination.
         val testName = "ArenaNative_folder_test_1KB.txt"
         val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/"
@@ -588,6 +590,18 @@ class MainActivity : Activity() {
                     }
                     if (contentResolver.update(uri, ready, null, null) <= 0) {
                         throw IllegalStateException("পরীক্ষামূলক ফাইল Downloads-এ প্রকাশ করা যায়নি")
+                    }
+                    val check = contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.IS_PENDING), null, null, null)
+                        ?: throw IllegalStateException("ফোল্ডারের ফাইল তালিকা পড়া যাচ্ছে না")
+                    check.use { cursor ->
+                        if (!cursor.moveToFirst()) throw IllegalStateException("পরীক্ষার ফাইলটি ফোল্ডারে পাওয়া যায়নি")
+                        val actualName = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME))
+                        val actualPath = cursor.getString(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH))
+                        val actualSize = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE))
+                        val pending = cursor.getInt(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.IS_PENDING))
+                        if (actualName != testName || actualPath != relativePath || actualSize != 1024L || pending != 0) {
+                            throw IllegalStateException("ফোল্ডার/ফাইল যাচাই মেলেনি: path=$actualPath, size=$actualSize")
+                        }
                     }
                 }
             }
@@ -807,7 +821,7 @@ class MainActivity : Activity() {
                 completeFolderSetup()
                 enterArena(null)
             } else {
-                Toast.makeText(this, "Download ফোল্ডার তৈরি করতে স্টোরেজ অনুমতি প্রয়োজন। আবার চেষ্টা করুন।", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "ফোল্ডার পরীক্ষা ব্যর্থ: $lastFolderCheckError", Toast.LENGTH_LONG).show()
             }
             return
         }
