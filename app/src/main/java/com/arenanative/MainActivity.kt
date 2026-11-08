@@ -20,10 +20,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.webkit.CookieManager
+import android.webkit.ConsoleMessage
 import android.webkit.DownloadListener
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import android.webkit.WebView
 import androidx.webkit.WebViewCompat
@@ -423,7 +425,7 @@ class MainActivity : Activity() {
             }
         }
         web.webChromeClient = object : WebChromeClient() {
-            override fun onConsoleMessage(message: WebChromeClient.ConsoleMessage): Boolean {
+            override fun onConsoleMessage(message: ConsoleMessage): Boolean {
                 val source = diagnosticUrl(message.sourceId())
                 when (message.messageLevel()) {
                     WebChromeClient.ConsoleMessage.MessageLevel.ERROR ->
