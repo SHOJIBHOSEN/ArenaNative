@@ -587,6 +587,12 @@ class MainActivity : Activity() {
                   const id = String(++nativeRequestId);
                   nativePending.set(id, resolve);
                   window.ArenaNative.postMessage(JSON.stringify(Object.assign({id:id, action:action}, fields || {})));
+                  setTimeout(() => {
+                    if (nativePending.has(id)) {
+                      nativePending.delete(id);
+                      resolve(false);
+                    }
+                  }, 15000);
                 });
               }
               function nativeSend(action, fields) {
@@ -605,7 +611,6 @@ class MainActivity : Activity() {
                     const part = await reader.read();
                     if (part.done) break;
                     const bytes = part.value;
-                    // Small chunks keep peak memory low on budget Android phones.
                     for (let offset = 0; offset < bytes.length; offset += 48 * 1024) {
                       const slice = bytes.subarray(offset, Math.min(offset + 48 * 1024, bytes.length));
                       let binary = '';
@@ -615,20 +620,28 @@ class MainActivity : Activity() {
                   }
                   await nativeCall('finishBlobTransfer', {success:true});
                 } catch (e) {
-                  await nativeCall('finishBlobTransfer', {success:false});
+                  nativeSend('reportDownloadError');
                 }
               };
-              document.addEventListener('click', function(event) {
-                const anchor = event.target && event.target.closest ? event.target.closest('a[download]') : null;
+              function handleDownloadClick(event) {
+                const target = event.target;
+                const anchor = target && target.closest ? target.closest('a') : null;
                 if (!anchor) return;
-                const href = anchor.href || '';
-                if (!href.startsWith('blob:') && !href.startsWith('data:') && !/^https?:/i.test(href)) return;
+                const href = anchor.href || anchor.getAttribute('href') || '';
+                const downloadName = anchor.getAttribute('download') || anchor.download || '';
+                const isBlobOrData = /^(blob:|data:)/i.test(href);
+                const isFileUrl = /^https?:/i.test(href) &&
+                  (/\.(pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|txt|png|jpe?g|webp|mp[34]|json)(?:$|[?#])/i.test(href) ||
+                   /(?:download|export|attachment|file)=?/i.test(href));
+                if (!downloadName && !isBlobOrData && !isFileUrl) return;
+                if (!isBlobOrData && !isFileUrl && !/^https?:/i.test(href)) return;
                 event.preventDefault();
-                event.stopImmediatePropagation();
-                const name = anchor.getAttribute('download') || 'Arena-download';
-                const mime = anchor.dataset.mime || '';
+                const name = downloadName || anchor.getAttribute('aria-label') || 'Arena-download';
+                const mime = anchor.dataset ? (anchor.dataset.mime || '') : '';
                 nativeSend('requestDownload', {url:href, name:name, mime:mime});
-              }, true);
+              }
+              document.addEventListener('click', handleDownloadClick, true);
+              document.addEventListener('auxclick', handleDownloadClick, true);
             })();
         """.trimIndent()
         web.evaluateJavascript(script, null)
