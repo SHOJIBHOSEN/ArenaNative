@@ -63,7 +63,6 @@ class MainActivity : Activity() {
     private var lastFolderCheckError: String = ""
     private val bridgeExecutor = Executors.newSingleThreadExecutor()
     private var bridgeAvailable = false
-    @Volatile private var confirmedMenuDownload = false
     private val downloadReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
@@ -129,10 +128,8 @@ class MainActivity : Activity() {
                 val name = cleanFileName(message.optString("name"))
                 val mime = message.optString("mime")
                 runOnUiThread {
-                    if (confirmedMenuDownload) {
-                        confirmedMenuDownload = false
-                        if (url.isNotBlank()) startDownload(url, name, mime)
-                        else Toast.makeText(this, "Download link was not provided by the page.", Toast.LENGTH_LONG).show()
+                    if (url.isBlank()) {
+                        Toast.makeText(this, "Download link was not provided by Arena.ai.", Toast.LENGTH_LONG).show()
                     } else {
                         AlertDialog.Builder(this)
                             .setTitle("Download file?")
@@ -141,20 +138,6 @@ class MainActivity : Activity() {
                             .setPositiveButton("Download") { _, _ -> startDownload(url, name, mime) }
                             .show()
                     }
-                }
-            }
-            "requestMenuDownload" -> {
-                val name = cleanFileName(message.optString("name").ifBlank { "Arena-download" })
-                runOnUiThread {
-                    AlertDialog.Builder(this)
-                        .setTitle("Download file?")
-                        .setMessage("$name\\n\\nContinue with the download from Arena.ai?")
-                        .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Download") { _, _ ->
-                            confirmedMenuDownload = true
-                            web.evaluateJavascript("window.__arenaNativeReplayDownloadClick && window.__arenaNativeReplayDownloadClick()", null)
-                        }
-                        .show()
                 }
             }
             "beginBlob" -> bridgeExecutor.execute {
@@ -376,12 +359,7 @@ class MainActivity : Activity() {
         web.setDownloadListener(DownloadListener { url, userAgent, disposition, mime, _ ->
             if (isTrustedArena()) {
                 val name = android.webkit.URLUtil.guessFileName(url, disposition, mime)
-                if (confirmedMenuDownload) {
-                    confirmedMenuDownload = false
-                    startDownload(url, name, mime ?: "")
-                } else {
-                    showDownloadConfirmation(url, name, mime)
-                }
+                showDownloadConfirmation(url, name, mime)
             }
         })
         showDuroodWelcome(root, savedInstanceState)
@@ -685,44 +663,10 @@ class MainActivity : Activity() {
                   nativeSend('reportDownloadError');
                 }
               };
-              let pendingMenuDownloadElement = null;
-              window.__arenaNativeReplayDownloadClick = function() {
-                const element = pendingMenuDownloadElement;
-                pendingMenuDownloadElement = null;
-                if (!element || !document.contains(element)) return;
-                window.__arenaNativeReplayingDownloadClick = true;
-                try {
-                  element.dispatchEvent(new MouseEvent('click', {bubbles:true, cancelable:true, view:window}));
-                } finally {
-                  window.__arenaNativeReplayingDownloadClick = false;
-                }
-              };
               function handleDownloadClick(event) {
-                if (window.__arenaNativeReplayingDownloadClick) return;
                 const target = event.target;
                 if (!target) return;
                 const anchor = target.closest ? target.closest('a') : null;
-                const actionElement = target.closest ? target.closest('a,button,[role="menuitem"],[role="button"]') : null;
-                const label = actionElement ? [
-                  actionElement.innerText, actionElement.textContent,
-                  actionElement.getAttribute('aria-label'),
-                  actionElement.getAttribute('title')
-                ].filter(Boolean).join(' ').trim() : '';
-                const looksLikeDownloadAction = /\\bdownload(?:\\s+(?:file|image|video|audio))?\\b/i.test(label);
-                if (looksLikeDownloadAction && actionElement) {
-                  const href = actionElement.href || actionElement.getAttribute('href') || '';
-                  const directFile = /^(https?:|blob:|data:)/i.test(href);
-                  if (!directFile || !anchor) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    pendingMenuDownloadElement = actionElement;
-                    nativeSend('requestMenuDownload', {
-                      name: actionElement.getAttribute('download') ||
-                        actionElement.getAttribute('aria-label') || 'Arena-download'
-                    });
-                    return;
-                  }
-                }
                 if (!anchor) return;
                 const href = anchor.href || anchor.getAttribute('href') || '';
                 const downloadName = anchor.getAttribute('download') || anchor.download || '';
