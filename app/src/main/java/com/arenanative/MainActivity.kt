@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private val folderSetupPermissionRequest = 4104
     private data class PendingDownload(val url: String, val name: String, val mime: String)
     private var pendingDownload: PendingDownload? = null
+    private var pendingBlobPermissionDownloadId: String? = null
     private val activeDownloadIds = mutableSetOf<Long>()
     private var downloadReceiverRegistered = false
     private var folderSetupView: View? = null
@@ -156,10 +157,7 @@ class MainActivity : Activity() {
                             )
                         }
                         .setPositiveButton("Download") { _, _ ->
-                            web.evaluateJavascript(
-                                "window.__arenaNativeConfirmBlobDownload && window.__arenaNativeConfirmBlobDownload(" + JSONObject.quote(downloadId) + ",true)",
-                                null
-                            )
+                            confirmBlobDownloadAfterPermission(downloadId)
                         }
                         .setOnCancelListener {
                             web.evaluateJavascript(
@@ -391,7 +389,15 @@ class MainActivity : Activity() {
         web.setDownloadListener(DownloadListener { url, userAgent, disposition, mime, _ ->
             if (isTrustedArena()) {
                 val name = android.webkit.URLUtil.guessFileName(url, disposition, mime)
-                showDownloadConfirmation(url, name, mime)
+                val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
+                if (scheme == "blob" || scheme == "data") {
+                    val js = "window.__arenaNativeQueueBlobDownload && window.__arenaNativeQueueBlobDownload(" +
+                        JSONObject.quote(url) + "," + JSONObject.quote(name) + "," +
+                        JSONObject.quote(mime ?: "") + ")"
+                    web.evaluateJavascript(js, null)
+                } else {
+                    showDownloadConfirmation(url, name, mime)
+                }
             }
         })
         showDuroodWelcome(root, savedInstanceState)
@@ -703,6 +709,24 @@ class MainActivity : Activity() {
                 }
               };
               const pendingBlobDownloads = new Map();
+              window.__arenaNativeQueueBlobDownload = function(url, name, mime) {
+                const downloadId = 'blob-' + String(++nativeRequestId);
+                const responsePromise = fetch(url).then(response => {
+                  if (!response.ok) throw new Error('Could not read generated file');
+                  return response;
+                });
+                responsePromise.catch(() => {});
+                pendingBlobDownloads.set(downloadId, {
+                  responsePromise:responsePromise,
+                  name:name || 'Arena-download',
+                  mime:mime || ''
+                });
+                nativeSend('requestBlobDownload', {
+                  downloadId:downloadId,
+                  name:name || 'Arena-download',
+                  mime:mime || ''
+                });
+              };
               window.__arenaNativeConfirmBlobDownload = function(downloadId, approved) {
                 const pending = pendingBlobDownloads.get(downloadId);
                 if (!pending) return;
@@ -727,22 +751,7 @@ class MainActivity : Activity() {
                 const mime = anchor.dataset ? (anchor.dataset.mime || '') : '';
                 if (isBlobOrData) {
                   event.preventDefault();
-                  const downloadId = 'blob-' + String(++nativeRequestId);
-                  const responsePromise = fetch(href).then(response => {
-                    if (!response.ok) throw new Error('Could not read generated file');
-                    return response;
-                  });
-                  responsePromise.catch(() => {});
-                  pendingBlobDownloads.set(downloadId, {
-                    responsePromise:responsePromise,
-                    name:name || 'Arena-download',
-                    mime:mime
-                  });
-                  nativeSend('requestBlobDownload', {
-                    downloadId:downloadId,
-                    name:name || 'Arena-download',
-                    mime:mime
-                  });
+                  window.__arenaNativeQueueBlobDownload(href, name || 'Arena-download', mime);
                   return;
                 }
                 if (!name && !isFileUrl) return;
@@ -765,6 +774,25 @@ class MainActivity : Activity() {
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Download") { _, _ -> startDownload(url, cleanFileName(name), mime ?: "") }
             .show()
+    }
+
+    private fun confirmBlobDownloadAfterPermission(downloadId: String) {
+        if (Build.VERSION.SDK_INT in Build.VERSION_CODES.M..Build.VERSION_CODES.P &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            pendingBlobPermissionDownloadId = downloadId
+            requestPermissions(
+                arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                legacyStoragePermissionRequest
+            )
+        } else {
+            confirmBlobDownloadInWebView(downloadId, true)
+        }
+    }
+
+    private fun confirmBlobDownloadInWebView(downloadId: String, approved: Boolean) {
+        val js = "window.__arenaNativeConfirmBlobDownload && window.__arenaNativeConfirmBlobDownload(" +
+            JSONObject.quote(downloadId) + "," + approved + ")"
+        web.evaluateJavascript(js, null)
     }
 
     private fun startDownload(url: String, name: String, mime: String) {
@@ -839,6 +867,17 @@ class MainActivity : Activity() {
             return
         }
         if (requestCode != legacyStoragePermissionRequest) return
+        val pendingBlobId = pendingBlobPermissionDownloadId
+        if (pendingBlobId != null) {
+            pendingBlobPermissionDownloadId = null
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            confirmBlobDownloadInWebView(pendingBlobId, granted)
+            if (!granted) {
+                Toast.makeText(this, "Storage permission is required to save downloads on Android 9 and older.", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
         val pending = pendingDownload
         pendingDownload = null
         if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED && pending != null) {
