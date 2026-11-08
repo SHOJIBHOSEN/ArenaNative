@@ -535,8 +535,9 @@ class MainActivity : Activity() {
             minHeight = dp(52)
             setOnClickListener {
                 root.removeView(scroll)
-                // Recheck the real Downloads/ArenaNative destination on every app launch.
-                showDownloadFolderSetup(root, savedInstanceState)
+                // Do not block app startup on the optional download-folder probe.
+                // Android's download APIs create Download/ArenaNative when a file is saved.
+                enterArena(savedInstanceState)
             }
         }
         panel.addView(heading, LinearLayout.LayoutParams(-1, -2))
