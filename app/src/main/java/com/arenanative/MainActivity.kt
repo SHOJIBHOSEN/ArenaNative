@@ -434,12 +434,8 @@ class MainActivity : Activity() {
             minHeight = dp(52)
             setOnClickListener {
                 root.removeView(scroll)
-                if (getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
-                        .getBoolean("download_folder_ready", false)) {
-                    enterArena(savedInstanceState)
-                } else {
-                    showDownloadFolderSetup(root, savedInstanceState)
-                }
+                // Recheck the real Downloads/ArenaNative destination on every app launch.
+                showDownloadFolderSetup(root, savedInstanceState)
             }
         }
         panel.addView(heading, LinearLayout.LayoutParams(-1, -2))
@@ -475,7 +471,7 @@ class MainActivity : Activity() {
             gravity = android.view.Gravity.CENTER
         }
         val message = TextView(this).apply {
-            text = "ডাউনলোড করা ফাইল গুছিয়ে রাখার জন্য Download/ArenaNative ফোল্ডারটি পরীক্ষা করা হবে। ফোল্ডার না থাকলে তৈরি করা হবে। এই সেটআপ শুধু প্রথমবার করতে হবে।"
+            text = "ডাউনলোড করা ফাইল গুছিয়ে রাখার জন্য Download/ArenaNative ফোল্ডারটি পরীক্ষা করা হবে। ফোল্ডার না থাকলে তৈরি করা হবে। অ্যাপ চালুর সময় প্রতিবার ১ KB পরীক্ষামূলক ফাইল লিখে ও পড়ে যাচাই করা হবে।"
             textSize = 16f
             setTextColor(Color.LTGRAY)
             gravity = android.view.Gravity.CENTER
@@ -504,6 +500,7 @@ class MainActivity : Activity() {
                     if (verifyDownloadFolderWrite()) {
                         getSharedPreferences("arena_native_setup", Context.MODE_PRIVATE)
                             .edit().putBoolean("download_folder_ready", true).apply()
+                        Toast.makeText(this, "ফোল্ডার যাচাই সফল। ১ KB test file: Download/ArenaNative", Toast.LENGTH_LONG).show()
                         completeFolderSetup()
                         enterArena(savedInstanceState)
                     } else {
@@ -532,7 +529,9 @@ class MainActivity : Activity() {
     }
 
     private fun verifyDownloadFolderWrite(): Boolean {
-        val testName = "ArenaNative_setup_check_${System.nanoTime()}.txt"
+        // Keep one visible 1 KB probe file so the user can verify the exact destination.
+        val testName = "ArenaNative_folder_test_1KB.txt"
+        val relativePath = "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/"
         val testBytes = ByteArray(1024) { index -> (index % 251).toByte() }
         var testUri: Uri? = null
         var testFile: java.io.File? = null
@@ -549,43 +548,63 @@ class MainActivity : Activity() {
                 }
                 val file = java.io.File(folder, testName)
                 testFile = file
-                java.io.FileOutputStream(file).use { it.write(testBytes) }
+                java.io.FileOutputStream(file, false).use { it.write(testBytes) }
                 val verified = file.inputStream().use { it.readBytes() }
-                passed = verified.contentEquals(testBytes)
+                passed = verified.contentEquals(testBytes) && file.length() == 1024L
             } else {
                 val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                // Remove only our previous probe file; never touch the user's other files.
+                val existing = contentResolver.query(
+                    collection,
+                    arrayOf(MediaStore.MediaColumns._ID),
+                    "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND ${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                    arrayOf(testName, relativePath),
+                    null
+                )
+                existing?.use { cursor ->
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    while (cursor.moveToNext()) {
+                        val oldUri = Uri.withAppendedPath(collection, cursor.getLong(idColumn).toString())
+                        contentResolver.delete(oldUri, null, null)
+                    }
+                }
                 val values = ContentValues().apply {
                     put(MediaStore.MediaColumns.DISPLAY_NAME, testName)
                     put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/ArenaNative/")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
                     put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 testUri = contentResolver.insert(collection, values)
-                    ?: throw IllegalStateException("ফোল্ডারে পরীক্ষামূলক ফাইল তৈরি করা যায়নি")
+                    ?: throw IllegalStateException("Download/ArenaNative ফোল্ডারে পরীক্ষামূলক ফাইল তৈরি করা যায়নি")
                 val uri = testUri!!
                 contentResolver.openOutputStream(uri, "w")?.use { it.write(testBytes) }
-                    ?: throw IllegalStateException("ফাইলে লেখা যাচ্ছে না")
+                    ?: throw IllegalStateException("১ KB পরীক্ষামূলক ফাইলে লেখা যাচ্ছে না")
                 val verified = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("ফাইল পড়ে যাচাই করা যাচ্ছে না")
-                passed = verified.contentEquals(testBytes)
+                    ?: throw IllegalStateException("১ KB পরীক্ষামূলক ফাইল পড়ে যাচাই করা যাচ্ছে না")
+                passed = verified.contentEquals(testBytes) && verified.size == 1024
+                if (passed) {
+                    val ready = ContentValues().apply {
+                        put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    }
+                    if (contentResolver.update(uri, ready, null, null) <= 0) {
+                        throw IllegalStateException("পরীক্ষামূলক ফাইল Downloads-এ প্রকাশ করা যায়নি")
+                    }
+                }
             }
+            if (!passed) throw IllegalStateException("১ KB ফাইলের লেখা-পড়া যাচাই মেলেনি")
+            android.util.Log.i("ArenaNative", "Download folder verified; 1 KB probe saved at Download/ArenaNative/$testName")
+            return true
         } catch (e: Exception) {
             android.util.Log.e("ArenaNative", "Download folder write test failed", e)
-            passed = false
+            return false
         } finally {
-            testFile?.let { file ->
-                if (file.exists() && !file.delete()) passed = false
-            }
-            testUri?.let { uri ->
-                try {
-                    if (contentResolver.delete(uri, null, null) <= 0) passed = false
-                } catch (e: Exception) {
-                    android.util.Log.w("ArenaNative", "Could not remove setup test file", e)
-                    passed = false
+            if (!passed) {
+                testFile?.let { file -> if (file.exists()) file.delete() }
+                testUri?.let { uri ->
+                    try { contentResolver.delete(uri, null, null) } catch (_: Exception) { }
                 }
             }
         }
-        return passed
     }
 
     private fun enterArena(savedInstanceState: Bundle?) {
