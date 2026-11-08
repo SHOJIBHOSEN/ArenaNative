@@ -428,9 +428,9 @@ class MainActivity : Activity() {
             override fun onConsoleMessage(message: ConsoleMessage): Boolean {
                 val source = diagnosticUrl(message.sourceId())
                 when (message.messageLevel()) {
-                    WebChromeClient.ConsoleMessage.MessageLevel.ERROR ->
+                    ConsoleMessage.MessageLevel.ERROR ->
                         android.util.Log.e(diagnosticsTag, "Page JavaScript error at ${source}:${message.lineNumber()}")
-                    WebChromeClient.ConsoleMessage.MessageLevel.WARNING ->
+                    ConsoleMessage.MessageLevel.WARNING ->
                         android.util.Log.w(diagnosticsTag, "Page JavaScript warning at ${source}:${message.lineNumber()}")
                     else -> Unit
                 }
